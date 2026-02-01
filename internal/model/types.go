@@ -16,6 +16,7 @@ type Node struct {
 	ID              string `json:"id"`
 	Type            string `json:"type"`
 	IPPrivate       string `json:"ipPrivate"`
+	IPTailscale     string `json:"ipTailscale"`
 	IPPublic        string `json:"ipPublic"`
 	PingEnabled     *bool  `json:"pingEnabled,omitempty"`
 	PingIntervalSec int    `json:"pingIntervalSec,omitempty"`

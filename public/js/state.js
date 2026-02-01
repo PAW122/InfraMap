@@ -118,6 +118,8 @@ function normalizeNode(node) {
     isInfraMapServer: node.isInfraMapServer === true,
     linkSpeedMbps: typeof node.linkSpeedMbps === "number" ? node.linkSpeedMbps : 0,
     tags: normalizeTags(node.tags),
+    ipTailscale: typeof node.ipTailscale === "string" ? node.ipTailscale : "",
+    autoTailscale: node.autoTailscale !== false,
   };
 }
 

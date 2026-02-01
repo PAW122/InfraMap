@@ -138,7 +138,7 @@ function buildNodeElement(node) {
 
   const ip = document.createElement("div");
   ip.className = "node__ip";
-  ip.textContent = buildIpLine(node);
+  renderIpLines(ip, node);
 
   if (node.type === "network") {
     const header = document.createElement("div");
@@ -202,8 +202,42 @@ function buildIpLine(node) {
   }
   const parts = [];
   if (node.ipPrivate) parts.push(`priv ${node.ipPrivate}`);
+  if (node.ipTailscale) parts.push(`ts ${node.ipTailscale}`);
   if (node.ipPublic) parts.push(`pub ${node.ipPublic}`);
-  return parts.length ? parts.join(" | ") : "no ip assigned";
+  return parts.length ? parts.join("\n") : "no ip assigned";
+}
+
+function renderIpLines(ipEl, node) {
+  if (!ipEl) return;
+  ipEl.innerHTML = "";
+  if (node.type === "network") {
+    ipEl.textContent = buildIpLine(node);
+    return;
+  }
+  const lines = [];
+  if (node.ipPrivate) lines.push({ type: "private", label: "priv", value: node.ipPrivate });
+  if (node.ipTailscale) lines.push({ type: "tailscale", label: "ts", value: node.ipTailscale });
+  if (node.ipPublic) lines.push({ type: "public", label: "pub", value: node.ipPublic });
+  if (!lines.length) {
+    ipEl.textContent = "no ip assigned";
+    return;
+  }
+  lines.forEach((line) => {
+    const lineEl = document.createElement("div");
+    lineEl.className = "ip-line";
+    if (line.type === "tailscale") {
+      const icon = document.createElement("span");
+      icon.className = "ip-icon ip-icon--ts";
+      icon.textContent = "TS";
+      const value = document.createElement("span");
+      value.textContent = line.value;
+      lineEl.appendChild(icon);
+      lineEl.appendChild(value);
+    } else {
+      lineEl.textContent = `${line.label} ${line.value}`;
+    }
+    ipEl.appendChild(lineEl);
+  });
 }
 
 function buildTagsElement(node) {
@@ -320,6 +354,12 @@ function updatePropsForm() {
   if (propsForm.elements.ipPrivate) {
     propsForm.elements.ipPrivate.value = node.ipPrivate || "";
   }
+  if (propsForm.elements.ipTailscale) {
+    propsForm.elements.ipTailscale.value = node.ipTailscale || "";
+  }
+  if (propsForm.elements.autoTailscale) {
+    propsForm.elements.autoTailscale.checked = node.autoTailscale !== false;
+  }
   if (propsForm.elements.ipPublic) {
     propsForm.elements.ipPublic.value = node.ipPublic || "";
   }
@@ -422,11 +462,13 @@ function addNode(type) {
     y: viewport.y + offset,
     network: "",
     ipPrivate: "",
+    ipTailscale: "",
     ipPublic: "",
     notes: "",
     connectEnabled: false,
     isInfraMapServer: false,
     linkSpeedMbps: 0,
+    autoTailscale: true,
     tags: [],
   };
   if (type === "network") {
@@ -476,9 +518,12 @@ async function loadBoard() {
   }
 }
 
-async function saveBoard() {
+async function saveBoard(options = {}) {
+  const silent = options.silent === true;
   try {
-    setStatus("Saving...", "info");
+    if (!silent) {
+      setStatus("Saving...", "info");
+    }
     state.board.meta = state.board.meta || {};
     state.board.meta.updatedAt = new Date().toISOString();
     const res = await fetch("/api/board", {
@@ -487,12 +532,20 @@ async function saveBoard() {
       body: JSON.stringify(state.board, null, 2),
     });
     if (!res.ok) throw new Error("failed");
-    setStatus("Saved to data/board.json.", "success");
+    if (!silent) {
+      setStatus("Saved to data/board.json.", "success");
+    }
     recordHistory();
     markSaved();
   } catch (err) {
-    setStatus("Save failed. Check server logs.", "error");
+    if (!silent) {
+      setStatus("Save failed. Check server logs.", "error");
+    }
   }
+}
+
+function saveBoardSilent() {
+  return saveBoard({ silent: true });
 }
 
 let panState = null;
@@ -686,8 +739,8 @@ propsForm.addEventListener("input", (event) => {
     assignNodesToNetworks();
     updatePropsForm();
   }
-  if (field === "ipPrivate" || field === "ipPublic") {
-    const hasIP = Boolean(node.ipPrivate || node.ipPublic);
+  if (field === "ipPrivate" || field === "ipPublic" || field === "ipTailscale") {
+    const hasIP = Boolean(node.ipPrivate || node.ipPublic || node.ipTailscale);
     if (!hasIP && node.pingEnabled) {
       node.pingEnabled = false;
       node.pingShowStatus = node.pingShowStatus !== false;
@@ -799,7 +852,7 @@ function updateNodeElement(node) {
   }
   if (icon) icon.textContent = typeLabels[node.type] || "SV";
   if (label) label.textContent = node.label || "Untitled";
-  if (ip) ip.textContent = buildIpLine(node);
+  if (ip) renderIpLines(ip, node);
   if (meta && node.type !== "network") {
     const existingBadge = meta.querySelector(".node__badge");
     if (node.isInfraMapServer) {

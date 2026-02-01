@@ -154,6 +154,7 @@ func (s *Server) handleDeviceSettings(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
+		var tailscaleIP string
 		settings, ok, err := s.secrets.Get(id)
 		if err != nil {
 			http.Error(w, "failed to read device settings", http.StatusInternalServerError)
@@ -185,13 +186,25 @@ func (s *Server) handleDeviceSettings(w http.ResponseWriter, r *http.Request) {
 						_ = s.secrets.Set(id, settings)
 					}
 				}
+				tsIP, tsErr := sshutil.DetectTailscaleIP(settings, 6*time.Second)
+				if tsErr != nil {
+					if s.logs != nil {
+						s.logs.Add("warn", "ssh", fmt.Sprintf("tailscale ip detect failed for %s: %v", id, tsErr))
+					}
+				} else if tsIP != "" {
+					tailscaleIP = tsIP
+					if s.logs != nil {
+						s.logs.Add("info", "ssh", fmt.Sprintf("tailscale ip %s detected for %s", tsIP, id))
+					}
+				}
 			} else if s.logs != nil {
 				s.logs.Add("info", "ssh", fmt.Sprintf("link speed detection skipped for %s (os=%s)", id, settings.OS))
 			}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"exists":   true,
-			"settings": settings,
+			"exists":      true,
+			"settings":    settings,
+			"tailscaleIp": tailscaleIP,
 		})
 	case http.MethodPost:
 		body, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))

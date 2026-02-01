@@ -20,7 +20,7 @@ function sanitizeMonitoringSettings(settings) {
 }
 
 function canEnablePing(node) {
-  return Boolean(node.ipPrivate || node.ipPublic);
+  return Boolean(node.ipPrivate || node.ipPublic || node.ipTailscale);
 }
 
 function getNodeMonitoring(node) {
@@ -98,14 +98,22 @@ async function hydrateDeviceSettings(nodes) {
   results.forEach((res, index) => {
     if (!res || !res.exists) return;
     const remote = res.settings || {};
+    const node = targets[index];
     const desired = remote.connectEnabled === true;
-    if (targets[index].connectEnabled !== desired) {
-      targets[index].connectEnabled = desired;
+    if (node.connectEnabled !== desired) {
+      node.connectEnabled = desired;
       changed = true;
     }
     if (typeof remote.linkSpeedMbps === "number" && remote.linkSpeedMbps >= 0) {
-      if (targets[index].linkSpeedMbps !== remote.linkSpeedMbps) {
-        targets[index].linkSpeedMbps = remote.linkSpeedMbps;
+      if (node.linkSpeedMbps !== remote.linkSpeedMbps) {
+        node.linkSpeedMbps = remote.linkSpeedMbps;
+        changed = true;
+      }
+    }
+    if (typeof res.tailscaleIp === "string" && res.tailscaleIp.trim() !== "") {
+      const ts = res.tailscaleIp.trim();
+      if (node.autoTailscale !== false && node.ipTailscale !== ts) {
+        node.ipTailscale = ts;
         changed = true;
       }
     }
@@ -114,7 +122,9 @@ async function hydrateDeviceSettings(nodes) {
     targets.forEach((node) => updateNodeElement(node));
     updateStatusBadges();
     updateLinksPositions();
+    updatePropsForm();
     syncMonitoringSettings();
+    saveBoardSilent();
   }
 }
 
@@ -137,7 +147,8 @@ async function openSettingsModal() {
     remoteSettings.connectEnabled === true || node.connectEnabled === true;
   settingsForm.elements.isInfraMapServer.checked = node.isInfraMapServer === true;
   settingsForm.elements.os.value = remoteSettings.os || "linux";
-  settingsForm.elements.host.value = remoteSettings.host || node.ipPublic || node.ipPrivate || "";
+  settingsForm.elements.host.value =
+    remoteSettings.host || node.ipPublic || node.ipPrivate || node.ipTailscale || "";
   settingsForm.elements.port.value = remoteSettings.port || "";
   settingsForm.elements.linkSpeedMbps.value =
     typeof remoteSettings.linkSpeedMbps === "number" && remoteSettings.linkSpeedMbps > 0
@@ -251,6 +262,20 @@ async function applySettingsFromForm() {
       updateLinksPositions();
     }
     setStatus("Device settings saved.", "success");
+    if (node.autoTailscale !== false && node.connectEnabled === true) {
+      const detected = await fetchDeviceSettings(node.id, true, true);
+      if (detected && typeof detected.tailscaleIp === "string") {
+        const ts = detected.tailscaleIp.trim();
+        if (ts && node.ipTailscale !== ts) {
+          node.ipTailscale = ts;
+          updateNodeElement(node);
+          updatePropsForm();
+          updateLinksPositions();
+          syncMonitoringSettings();
+          saveBoardSilent();
+        }
+      }
+    }
   } catch (err) {
     setStatus("Failed to save device settings.", "warn");
   }
@@ -270,6 +295,7 @@ async function postMonitoringNodes() {
         id: node.id,
         type: node.type,
         ipPrivate: node.ipPrivate || "",
+        ipTailscale: node.ipTailscale || "",
         ipPublic: node.ipPublic || "",
         pingEnabled: node.pingEnabled === true,
         pingIntervalSec: node.pingIntervalSec || monitoringDefaults.intervalSec,

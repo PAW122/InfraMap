@@ -282,6 +282,9 @@ func pickTarget(node model.Node) string {
 	if node.IPPrivate != "" {
 		return node.IPPrivate
 	}
+	if node.IPTailscale != "" {
+		return node.IPTailscale
+	}
 	return ""
 }
 

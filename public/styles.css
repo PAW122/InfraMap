@@ -383,6 +383,16 @@ code {
   font-weight: 600;
 }
 
+.props label.toggle {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.props label.toggle span {
+  font-weight: 600;
+}
+
 .props input,
 .props select,
 .props textarea {
@@ -600,6 +610,35 @@ code {
 .node__ip {
   font-size: 11px;
   color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  white-space: normal;
+}
+
+.node__ip .ip-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.node__ip .ip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: rgba(29, 111, 163, 0.12);
+  color: var(--accent-2);
+  font-size: 9px;
+  font-weight: 700;
+  margin-right: 6px;
+}
+
+.node__ip .ip-icon--ts {
+  background: rgba(123, 93, 197, 0.16);
+  color: #5a3aa8;
 }
 
 .node--server .node__icon {
