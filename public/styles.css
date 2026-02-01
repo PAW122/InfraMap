@@ -423,16 +423,24 @@ code {
   display: block;
 }
 
+.node.status-visible .node__status {
+  display: block;
+}
+
 .node[data-status="online"] .node__status {
   background: var(--accent-3);
 }
 
 .node[data-status="offline"] .node__status {
-  background: var(--danger);
+  background: #c0c0c0;
 }
 
 .node[data-status="unknown"] .node__status {
   background: #c0c0c0;
+}
+
+.node[data-status="ssh"] .node__status {
+  background: var(--accent-2);
 }
 
 .node[data-status="disabled"] .node__status {
@@ -678,6 +686,10 @@ code {
   z-index: 1;
 }
 
+.modal__panel--wide {
+  width: min(720px, 92vw);
+}
+
 .modal__header {
   display: flex;
   align-items: center;
@@ -699,12 +711,55 @@ code {
   font-weight: 600;
 }
 
-.settings-form input[type="number"] {
+.settings-form input[type="number"],
+.settings-form input[type="text"],
+.settings-form input[type="password"],
+.settings-form select,
+.settings-form textarea {
   border-radius: 12px;
   border: 1px solid rgba(28, 29, 33, 0.15);
   padding: 10px 12px;
   font-size: 14px;
   font-family: inherit;
+}
+
+.settings-form textarea {
+  resize: vertical;
+  min-height: 110px;
+  font-family: "IBM Plex Mono", "Courier New", monospace;
+}
+
+.divider {
+  height: 1px;
+  background: rgba(28, 29, 33, 0.08);
+  margin: 4px 0;
+}
+
+.settings-help {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(28, 29, 33, 0.04);
+  font-size: 12px;
+  color: var(--muted);
+  display: none;
+}
+
+.settings-help.active {
+  display: block;
+}
+
+.help-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+  color: var(--ink);
+}
+
+.help-text code {
+  background: rgba(28, 29, 33, 0.08);
+  padding: 2px 6px;
+  border-radius: 6px;
+  display: inline-block;
+  margin-top: 6px;
 }
 
 .toggle {
@@ -720,6 +775,25 @@ code {
 .modal__footer {
   display: flex;
   justify-content: flex-end;
+}
+
+.logs-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.logs-output {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(28, 29, 33, 0.12);
+  background: rgba(28, 29, 33, 0.03);
+  font-family: "IBM Plex Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 
 @keyframes fadeIn {

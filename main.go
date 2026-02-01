@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,12 +23,16 @@ import (
 )
 
 const (
-	dataDir   = "data"
-	boardFile = "data/board.json"
-	addr      = ":8080"
+	dataDir       = "data"
+	boardFile     = "data/board.json"
+	secretsFile   = "data/secrets.json"
+	secretKeyFile = "data/secrets.key"
+	addr          = ":8080"
 )
 
 var pingManager = NewPingManager()
+var secretStore *SecretStore
+var logStore = NewLogStore(500)
 
 type MonitoringSettings struct {
 	Enabled     bool `json:"enabled"`
@@ -43,6 +51,7 @@ type Node struct {
 	IPPublic        string `json:"ipPublic"`
 	PingEnabled     *bool  `json:"pingEnabled,omitempty"`
 	PingIntervalSec int    `json:"pingIntervalSec,omitempty"`
+	ConnectEnabled  bool   `json:"connectEnabled,omitempty"`
 }
 
 type Board struct {
@@ -58,15 +67,59 @@ type PingResult struct {
 	Error       string    `json:"error,omitempty"`
 }
 
+type LogEntry struct {
+	Time    string `json:"time"`
+	Level   string `json:"level"`
+	Source  string `json:"source"`
+	Message string `json:"message"`
+}
+
+type DeviceSettings struct {
+	OS                   string `json:"os"`
+	Host                 string `json:"host"`
+	Port                 int    `json:"port"`
+	AuthMethod           string `json:"authMethod"`
+	Username             string `json:"username"`
+	Password             string `json:"password"`
+	PrivateKey           string `json:"privateKey"`
+	PrivateKeyPassphrase string `json:"privateKeyPassphrase"`
+	ConnectEnabled       bool   `json:"connectEnabled"`
+}
+
+type SecretsFile struct {
+	Version   int               `json:"version"`
+	UpdatedAt string            `json:"updatedAt"`
+	Items     map[string]string `json:"items"`
+}
+
+type SecretStore struct {
+	mu   sync.Mutex
+	key  []byte
+	path string
+}
+
+type LogStore struct {
+	mu    sync.Mutex
+	items []LogEntry
+	max   int
+}
+
 func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.Dir("public")))
 	mux.HandleFunc("/api/health", handleHealth)
 	mux.HandleFunc("/api/board", handleBoard)
 	mux.HandleFunc("/api/status", handleStatus)
+	mux.HandleFunc("/api/logs", handleLogs)
 	mux.HandleFunc("/api/monitoring", handleMonitoring)
 	mux.HandleFunc("/api/monitoring/nodes", handleMonitoringNodes)
+	mux.HandleFunc("/api/device-settings/", handleDeviceSettings)
 
+	var err error
+	secretStore, err = NewSecretStore(secretKeyFile, secretsFile)
+	if err != nil {
+		log.Fatalf("failed to init secrets store: %v", err)
+	}
 	bootstrapManager()
 	log.Printf("InfraMap server listening on http://localhost%s", addr)
 	if err := http.ListenAndServe(addr, withLogging(mux)); err != nil {
@@ -101,6 +154,24 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"updatedAt": time.Now().UTC().Format(time.RFC3339),
 		"results":   results,
+	})
+}
+
+func handleLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	limit := 200
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			if parsed > 0 && parsed <= 1000 {
+				limit = parsed
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": logStore.List(limit),
 	})
 }
 
@@ -148,6 +219,92 @@ func handleMonitoringNodes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status": "ok",
 	})
+}
+
+func handleDeviceSettings(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/device-settings/")
+	if id == "" || id == "/" {
+		http.Error(w, "missing device id", http.StatusBadRequest)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		settings, ok, err := secretStore.Get(id)
+		if err != nil {
+			http.Error(w, "failed to read device settings", http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"exists":   false,
+				"settings": DeviceSettings{},
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"exists":   true,
+			"settings": settings,
+		})
+	case http.MethodPost:
+		body, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
+		if err != nil {
+			http.Error(w, "failed to read request body", http.StatusBadRequest)
+			return
+		}
+		var settings DeviceSettings
+		if err := json.Unmarshal(body, &settings); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		prevSettings, prevExists, prevErr := secretStore.Get(id)
+		if prevErr != nil {
+			logStore.Add("warn", "settings", fmt.Sprintf("failed to read previous settings for %s: %v", id, prevErr))
+		}
+		settings = sanitizeDeviceSettings(settings)
+		if err := secretStore.Set(id, settings); err != nil {
+			http.Error(w, "failed to save device settings", http.StatusInternalServerError)
+			return
+		}
+		if prevExists {
+			if prevSettings.ConnectEnabled != settings.ConnectEnabled {
+				action := "disabled"
+				if settings.ConnectEnabled {
+					action = "enabled"
+				}
+				logStore.Add("info", "ssh", fmt.Sprintf("SSH connection %s for %s", action, id))
+			}
+		} else if settings.ConnectEnabled {
+			logStore.Add("info", "ssh", fmt.Sprintf("SSH connection enabled for %s", id))
+		}
+		if settings.ConnectEnabled {
+			host := settings.Host
+			if host == "" {
+				host = "unset"
+			}
+			port := settings.Port
+			if port == 0 {
+				port = 22
+			}
+			user := settings.Username
+			if user == "" {
+				user = "unset"
+			}
+			logStore.Add("info", "ssh", fmt.Sprintf("SSH settings saved for %s (host=%s port=%d user=%s)", id, host, port, user))
+		}
+		writeJSON(w, http.StatusOK, map[string]string{
+			"status": "saved",
+		})
+	case http.MethodDelete:
+		if err := secretStore.Delete(id); err != nil {
+			http.Error(w, "failed to delete device settings", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{
+			"status": "deleted",
+		})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func serveBoard(w http.ResponseWriter) {
@@ -320,6 +477,245 @@ func updateManagerFromBytes(data []byte) {
 		return
 	}
 	pingManager.UpdateFromBoard(&board)
+}
+
+func NewSecretStore(keyPath, dataPath string) (*SecretStore, error) {
+	if err := ensureDataDir(); err != nil {
+		return nil, err
+	}
+	key, err := loadOrCreateKey(keyPath)
+	if err != nil {
+		return nil, err
+	}
+	return &SecretStore{
+		key:  key,
+		path: dataPath,
+	}, nil
+}
+
+func NewLogStore(max int) *LogStore {
+	if max <= 0 {
+		max = 500
+	}
+	return &LogStore{
+		items: make([]LogEntry, 0, max),
+		max:   max,
+	}
+}
+
+func (l *LogStore) Add(level, source, message string) {
+	if l == nil {
+		return
+	}
+	entry := LogEntry{
+		Time:    time.Now().UTC().Format(time.RFC3339),
+		Level:   level,
+		Source:  source,
+		Message: message,
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.items) >= l.max {
+		copy(l.items, l.items[1:])
+		l.items[len(l.items)-1] = entry
+		return
+	}
+	l.items = append(l.items, entry)
+}
+
+func (l *LogStore) List(limit int) []LogEntry {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if limit <= 0 || limit > len(l.items) {
+		limit = len(l.items)
+	}
+	start := len(l.items) - limit
+	out := make([]LogEntry, limit)
+	copy(out, l.items[start:])
+	return out
+}
+
+func (s *SecretStore) Get(id string) (DeviceSettings, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	file, err := s.load()
+	if err != nil {
+		return DeviceSettings{}, false, err
+	}
+	blob, ok := file.Items[id]
+	if !ok {
+		return DeviceSettings{}, false, nil
+	}
+	plaintext, err := decryptPayload(s.key, blob)
+	if err != nil {
+		return DeviceSettings{}, false, err
+	}
+	var settings DeviceSettings
+	if err := json.Unmarshal(plaintext, &settings); err != nil {
+		return DeviceSettings{}, false, err
+	}
+	return settings, true, nil
+}
+
+func (s *SecretStore) Set(id string, settings DeviceSettings) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	file, err := s.load()
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(settings)
+	if err != nil {
+		return err
+	}
+	blob, err := encryptPayload(s.key, raw)
+	if err != nil {
+		return err
+	}
+	file.Items[id] = blob
+	file.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	return s.save(file)
+}
+
+func (s *SecretStore) Delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	file, err := s.load()
+	if err != nil {
+		return err
+	}
+	delete(file.Items, id)
+	file.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	return s.save(file)
+}
+
+func (s *SecretStore) load() (*SecretsFile, error) {
+	if _, err := os.Stat(s.path); err != nil {
+		if os.IsNotExist(err) {
+			return &SecretsFile{
+				Version:   1,
+				UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+				Items:     make(map[string]string),
+			}, nil
+		}
+		return nil, err
+	}
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		return nil, err
+	}
+	var file SecretsFile
+	if err := json.Unmarshal(data, &file); err != nil {
+		return nil, err
+	}
+	if file.Items == nil {
+		file.Items = make(map[string]string)
+	}
+	if file.Version == 0 {
+		file.Version = 1
+	}
+	return &file, nil
+}
+
+func (s *SecretStore) save(file *SecretsFile) error {
+	payload, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.path, payload, 0o600)
+}
+
+func loadOrCreateKey(path string) ([]byte, error) {
+	if _, err := os.Stat(path); err == nil {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+		if err != nil {
+			return nil, err
+		}
+		if len(decoded) != 32 {
+			return nil, fmt.Errorf("invalid secret key length")
+		}
+		return decoded, nil
+	}
+
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	encoded := base64.StdEncoding.EncodeToString(key)
+	if err := os.WriteFile(path, []byte(encoded), 0o600); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+func encryptPayload(key, plaintext []byte) (string, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	ciphertext := gcm.Seal(nil, nonce, plaintext, nil)
+	combined := append(nonce, ciphertext...)
+	return base64.StdEncoding.EncodeToString(combined), nil
+}
+
+func decryptPayload(key []byte, payload string) ([]byte, error) {
+	data, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return nil, err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) < gcm.NonceSize() {
+		return nil, fmt.Errorf("invalid payload")
+	}
+	nonce := data[:gcm.NonceSize()]
+	ciphertext := data[gcm.NonceSize():]
+	return gcm.Open(nil, nonce, ciphertext, nil)
+}
+
+func sanitizeDeviceSettings(settings DeviceSettings) DeviceSettings {
+	settings.OS = strings.ToLower(strings.TrimSpace(settings.OS))
+	if settings.OS == "" {
+		settings.OS = "linux"
+	}
+	settings.Host = strings.TrimSpace(settings.Host)
+	if settings.Port == 0 {
+		settings.Port = 22
+	}
+	settings.AuthMethod = strings.ToLower(strings.TrimSpace(settings.AuthMethod))
+	if settings.AuthMethod == "" {
+		settings.AuthMethod = "password"
+	}
+	if settings.AuthMethod == "password" {
+		settings.PrivateKey = ""
+		settings.PrivateKeyPassphrase = ""
+	}
+	if settings.AuthMethod == "ssh_key" {
+		settings.Password = ""
+	}
+	settings.Username = strings.TrimSpace(settings.Username)
+	return settings
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
@@ -525,6 +921,7 @@ func (m *PingManager) runPingCycle() {
 				Error:       "no ip",
 			}
 			resultsMu.Unlock()
+			logStore.Add("warn", "ping", fmt.Sprintf("ping skipped for %s: no ip", node.ID))
 			continue
 		}
 
@@ -537,6 +934,12 @@ func (m *PingManager) runPingCycle() {
 			resultsMu.Lock()
 			results[nodeID] = result
 			resultsMu.Unlock()
+			level := "info"
+			if !result.Online {
+				level = "warn"
+			}
+			msg := fmt.Sprintf("ping %s -> online=%t rtt=%dms error=%s", nodeID, result.Online, result.RTTMs, result.Error)
+			logStore.Add(level, "ping", msg)
 		}(node.ID, target)
 	}
 

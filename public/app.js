@@ -16,11 +16,16 @@ const dirtyIndicator = document.getElementById("dirty-indicator");
 const linkBtn = document.getElementById("link-btn");
 const undoBtn = document.getElementById("undo-btn");
 const redoBtn = document.getElementById("redo-btn");
+const logsBtn = document.getElementById("logs-btn");
 const settingsBtn = document.getElementById("settings-btn");
 const settingsModal = document.getElementById("settings-modal");
 const settingsClose = document.getElementById("settings-close");
 const settingsApply = document.getElementById("settings-apply");
 const settingsForm = document.getElementById("settings-form");
+const logsModal = document.getElementById("logs-modal");
+const logsClose = document.getElementById("logs-close");
+const logsRefresh = document.getElementById("logs-refresh");
+const logsOutput = document.getElementById("logs-output");
 
 const gridSize = 32;
 const zoomLimits = { min: 0.35, max: 2.5 };
@@ -100,7 +105,10 @@ function normalizeNode(node) {
       color: typeof node.color === "string" ? node.color : networkDefaults.color,
     };
   }
-  return node;
+  return {
+    ...node,
+    connectEnabled: node.connectEnabled === true,
+  };
 }
 
 function setStatus(message, tone = "neutral") {
@@ -227,8 +235,8 @@ function hasAnyVisibleStatus() {
   return state.board.nodes.some(
     (node) =>
       node.type !== "network" &&
-      node.pingEnabled === true &&
-      node.pingShowStatus !== false
+      node.pingShowStatus !== false &&
+      (node.pingEnabled === true || node.connectEnabled === true)
   );
 }
 
@@ -257,10 +265,53 @@ function getNodeMonitoring(node) {
 function syncSettingsFormState(enabled) {
   if (!settingsForm) return;
   settingsForm.elements.pingInterval.disabled = !enabled;
-  settingsForm.elements.showStatus.disabled = !enabled;
+  settingsForm.elements.showStatus.disabled = false;
 }
 
-function openSettingsModal() {
+function setAuthVisibility(method) {
+  if (!settingsForm) return;
+  settingsForm.querySelectorAll("[data-auth]").forEach((el) => {
+    if (el.dataset.auth === method) {
+      el.style.display = "flex";
+    } else {
+      el.style.display = "none";
+    }
+  });
+}
+
+function setHelpForOS(os) {
+  if (!settingsForm) return;
+  settingsForm.querySelectorAll(".settings-help").forEach((el) => {
+    if (el.dataset.os === os) {
+      el.classList.add("active");
+    } else {
+      el.classList.remove("active");
+    }
+  });
+}
+
+async function fetchDeviceSettings(id) {
+  try {
+    const res = await fetch(`/api/device-settings/${id}`);
+    if (!res.ok) return { exists: false, settings: {} };
+    return await res.json();
+  } catch (err) {
+    return { exists: false, settings: {} };
+  }
+}
+
+async function saveDeviceSettings(id, settings) {
+  const res = await fetch(`/api/device-settings/${id}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) {
+    throw new Error("failed");
+  }
+}
+
+async function openSettingsModal() {
   if (!settingsModal || !settingsForm) return;
   const node = getSelectedNode();
   if (!node || node.type === "network") {
@@ -269,14 +320,28 @@ function openSettingsModal() {
   }
   const settings = getNodeMonitoring(node);
   const hasIP = canEnablePing(node);
+  const remote = await fetchDeviceSettings(node.id);
+  const remoteSettings = remote.settings || {};
   settingsForm.elements.pingEnabled.checked = hasIP && node.pingEnabled === true;
   settingsForm.elements.pingEnabled.disabled = !hasIP;
   settingsForm.elements.pingInterval.value = settings.intervalSec;
   settingsForm.elements.showStatus.checked = settings.showStatus;
+  settingsForm.elements.connectEnabled.checked =
+    remoteSettings.connectEnabled === true || node.connectEnabled === true;
+  settingsForm.elements.os.value = remoteSettings.os || "linux";
+  settingsForm.elements.host.value = remoteSettings.host || node.ipPublic || node.ipPrivate || "";
+  settingsForm.elements.port.value = remoteSettings.port || "";
+  settingsForm.elements.authMethod.value = remoteSettings.authMethod || "password";
+  settingsForm.elements.username.value = remoteSettings.username || "";
+  settingsForm.elements.password.value = remoteSettings.password || "";
+  settingsForm.elements.privateKey.value = remoteSettings.privateKey || "";
+  settingsForm.elements.privateKeyPassphrase.value = remoteSettings.privateKeyPassphrase || "";
   syncSettingsFormState(settingsForm.elements.pingEnabled.checked);
+  setAuthVisibility(settingsForm.elements.authMethod.value);
+  setHelpForOS(settingsForm.elements.os.value);
   const title = document.getElementById("settings-title");
   if (title) {
-    title.textContent = `Settings · ${node.label || node.id}`;
+    title.textContent = `Settings - ${node.label || node.id}`;
   }
   settingsModal.classList.remove("is-hidden");
 }
@@ -286,7 +351,49 @@ function closeSettingsModal() {
   settingsModal.classList.add("is-hidden");
 }
 
-function applySettingsFromForm() {
+let logsTimer = null;
+
+function formatLogEntry(entry) {
+  const time = entry.time || "";
+  const level = (entry.level || "info").toUpperCase();
+  const source = entry.source || "system";
+  const message = entry.message || "";
+  return `[${time}] [${level}] [${source}] ${message}`;
+}
+
+async function fetchLogs() {
+  if (!logsOutput) return;
+  try {
+    const res = await fetch("/api/logs?limit=200");
+    if (!res.ok) throw new Error("failed");
+    const data = await res.json();
+    const items = Array.isArray(data.items) ? data.items : [];
+    logsOutput.textContent = items.length
+      ? items.map((entry) => formatLogEntry(entry)).join("\n")
+      : "No logs yet.";
+  } catch (err) {
+    logsOutput.textContent = "Failed to load logs.";
+  }
+}
+
+function openLogsModal() {
+  if (!logsModal) return;
+  logsModal.classList.remove("is-hidden");
+  fetchLogs();
+  if (logsTimer) clearInterval(logsTimer);
+  logsTimer = setInterval(fetchLogs, 5000);
+}
+
+function closeLogsModal() {
+  if (!logsModal) return;
+  logsModal.classList.add("is-hidden");
+  if (logsTimer) {
+    clearInterval(logsTimer);
+    logsTimer = null;
+  }
+}
+
+async function applySettingsFromForm() {
   if (!settingsForm) return;
   const node = getSelectedNode();
   if (!node || node.type === "network") return;
@@ -298,10 +405,28 @@ function applySettingsFromForm() {
   node.pingEnabled = hasIP && settingsForm.elements.pingEnabled.checked;
   node.pingIntervalSec = settings.intervalSec;
   node.pingShowStatus = settings.showStatus;
+  node.connectEnabled = settingsForm.elements.connectEnabled.checked;
   updateNodeElement(node);
   updateStatusBadges();
   recordHistory();
   syncMonitoringSettings();
+  const deviceSettings = {
+    os: settingsForm.elements.os.value,
+    host: settingsForm.elements.host.value,
+    port: parseInt(settingsForm.elements.port.value, 10) || 0,
+    connectEnabled: settingsForm.elements.connectEnabled.checked,
+    authMethod: settingsForm.elements.authMethod.value,
+    username: settingsForm.elements.username.value,
+    password: settingsForm.elements.password.value,
+    privateKey: settingsForm.elements.privateKey.value,
+    privateKeyPassphrase: settingsForm.elements.privateKeyPassphrase.value,
+  };
+  try {
+    await saveDeviceSettings(node.id, deviceSettings);
+    setStatus("Device settings saved.", "success");
+  } catch (err) {
+    setStatus("Failed to save device settings.", "warn");
+  }
   closeSettingsModal();
 }
 
@@ -321,6 +446,7 @@ async function postMonitoringNodes() {
         ipPublic: node.ipPublic || "",
         pingEnabled: node.pingEnabled === true,
         pingIntervalSec: node.pingIntervalSec || monitoringDefaults.intervalSec,
+        connectEnabled: node.connectEnabled === true,
       })),
     };
     await fetch("/api/monitoring/nodes", {
@@ -382,10 +508,14 @@ function updateStatusBadges() {
 
 function applyStatusToNode(node, nodeEl) {
   let stateLabel = "unknown";
-  let title = "Unknown";
-  if (node.pingEnabled !== true || node.pingShowStatus === false) {
+  let title = "No connection";
+  const hasMonitoring = node.pingEnabled === true || node.connectEnabled === true;
+  const isVisible = hasMonitoring && node.pingShowStatus !== false;
+  nodeEl.classList.toggle("status-visible", isVisible);
+  nodeEl.classList.toggle("status-hidden", !isVisible);
+  if (!isVisible) {
     stateLabel = "disabled";
-    title = node.pingEnabled !== true ? "Monitoring disabled" : "Status hidden";
+    title = hasMonitoring ? "Status hidden" : "Monitoring disabled";
     nodeEl.dataset.status = stateLabel;
     const dot = nodeEl.querySelector(".node__status");
     if (dot) {
@@ -393,16 +523,19 @@ function applyStatusToNode(node, nodeEl) {
     }
     return;
   }
-  const status = state.statusById[node.id];
-  if (status) {
-    if (status.error === "no ip") {
-      stateLabel = "unknown";
-      title = "No IP assigned";
+  if (node.connectEnabled === true) {
+    stateLabel = "ssh";
+    title = "SSH enabled";
+  } else if (node.pingEnabled === true) {
+    const status = state.statusById[node.id];
+    if (status && status.online) {
+      stateLabel = "online";
+      title = "Online (ping)";
     } else {
-      stateLabel = status.online ? "online" : "offline";
-      title = status.online ? "Online" : "Offline";
+      stateLabel = "unknown";
+      title = status && status.error === "no ip" ? "No IP assigned" : "No ping response";
     }
-    if (status.lastChecked) {
+    if (status && status.lastChecked) {
       title += ` (checked ${status.lastChecked})`;
     }
   }
@@ -797,6 +930,7 @@ function addNode(type) {
     ipPrivate: "",
     ipPublic: "",
     notes: "",
+    connectEnabled: false,
   };
   if (type === "network") {
     node.label = `LAN-${state.board.nodes.filter((n) => n.type === "network").length + 1}`;
@@ -1104,11 +1238,6 @@ function updateNodeElement(node) {
   } else {
     nodeEl.dataset.status = "";
   }
-  if (node.pingShowStatus === false) {
-    nodeEl.classList.add("status-hidden");
-  } else {
-    nodeEl.classList.remove("status-hidden");
-  }
 }
 
 function createLinksLayer() {
@@ -1352,6 +1481,21 @@ if (settingsBtn) {
     openSettingsModal();
   });
 }
+if (logsBtn) {
+  logsBtn.addEventListener("click", () => {
+    openLogsModal();
+  });
+}
+if (logsClose) {
+  logsClose.addEventListener("click", () => {
+    closeLogsModal();
+  });
+}
+if (logsRefresh) {
+  logsRefresh.addEventListener("click", () => {
+    fetchLogs();
+  });
+}
 if (settingsClose) {
   settingsClose.addEventListener("click", () => {
     closeSettingsModal();
@@ -1364,6 +1508,13 @@ if (settingsModal) {
     }
   });
 }
+if (logsModal) {
+  logsModal.addEventListener("click", (event) => {
+    if (event.target && event.target.dataset && event.target.dataset.close === "logs") {
+      closeLogsModal();
+    }
+  });
+}
 if (settingsApply) {
   settingsApply.addEventListener("click", () => {
     applySettingsFromForm();
@@ -1373,6 +1524,12 @@ if (settingsForm) {
   settingsForm.addEventListener("input", (event) => {
     if (event.target.name === "pingEnabled") {
       syncSettingsFormState(event.target.checked);
+    }
+    if (event.target.name === "authMethod") {
+      setAuthVisibility(event.target.value);
+    }
+    if (event.target.name === "os") {
+      setHelpForOS(event.target.value);
     }
   });
 }

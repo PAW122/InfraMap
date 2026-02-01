@@ -26,6 +26,15 @@
           <button id="link-btn" class="btn btn--ghost">Link Mode</button>
         </div>
         <div class="toolbar toolbar--actions">
+          <button id="logs-btn" class="btn btn--ghost btn--icon" type="button" title="Logs">
+            <span class="btn__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="presentation">
+                <path
+                  d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v13a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 18.5v-13zm2.5-.5a.5.5 0 0 0-.5.5v13a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5v-13a.5.5 0 0 0-.5-.5h-11zm2.8 4.2 2.1 2.1-2.1 2.1 1.4 1.4 3.5-3.5-3.5-3.5-1.4 1.4zm5.3 5.8h4v2h-4v-2z"
+                />
+              </svg>
+            </span>
+          </button>
           <button id="undo-btn" class="btn btn--ghost btn--icon" type="button" title="Undo">
             &larr;
           </button>
@@ -167,10 +176,75 @@
             <input type="checkbox" name="showStatus" />
             <span>Show status on canvas</span>
           </label>
+          <div class="divider"></div>
+          <label class="toggle">
+            <input type="checkbox" name="connectEnabled" />
+            <span>Enable device connection (SSH)</span>
+          </label>
+          <label>
+            OS type
+            <select name="os">
+              <option value="linux">Linux</option>
+              <option value="windows">Windows</option>
+            </select>
+          </label>
+          <label>
+            Host / IP
+            <input type="text" name="host" placeholder="192.168.0.10" />
+          </label>
+          <label>
+            Port (optional)
+            <input type="number" name="port" min="1" max="65535" placeholder="22" />
+          </label>
+          <label>
+            Auth method
+            <select name="authMethod">
+              <option value="password">Username + Password</option>
+              <option value="ssh_key">SSH Key</option>
+            </select>
+          </label>
+          <label>
+            Username
+            <input type="text" name="username" placeholder="root" />
+          </label>
+          <label data-auth="password">
+            Password
+            <input type="password" name="password" />
+          </label>
+          <label data-auth="ssh_key">
+            SSH private key (OpenSSH/PEM)
+            <textarea name="privateKey" rows="5" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+          </label>
+          <label data-auth="ssh_key">
+            Key passphrase (optional)
+            <input type="password" name="privateKeyPassphrase" />
+          </label>
+          <div class="settings-help" data-os="linux">
+            <div class="help-title">Linux SSH setup</div>
+            <div class="help-text">Install and enable SSH server: <code>sudo apt install openssh-server</code>, <code>sudo systemctl enable --now ssh</code>. Ensure port 22 is open.</div>
+          </div>
+          <div class="settings-help" data-os="windows">
+            <div class="help-title">Windows SSH setup</div>
+            <div class="help-text">Enable OpenSSH Server (PowerShell as Admin): <code>Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0</code>, <code>Start-Service sshd</code>, <code>Set-Service -Name sshd -StartupType Automatic</code>. Open port 22 in firewall.</div>
+          </div>
         </form>
         <div class="modal__footer">
           <button id="settings-apply" class="btn btn--primary" type="button">Apply</button>
         </div>
+      </div>
+    </div>
+
+    <div id="logs-modal" class="modal is-hidden" role="dialog" aria-modal="true" aria-labelledby="logs-title">
+      <div class="modal__backdrop" data-close="logs"></div>
+      <div class="modal__panel modal__panel--wide">
+        <div class="modal__header">
+          <h3 id="logs-title">Logs</h3>
+          <button id="logs-close" class="btn btn--ghost btn--icon" type="button">X</button>
+        </div>
+        <div class="logs-toolbar">
+          <button id="logs-refresh" class="btn btn--ghost btn--tiny" type="button">Refresh</button>
+        </div>
+        <pre id="logs-output" class="logs-output">Loading logs...</pre>
       </div>
     </div>
 
