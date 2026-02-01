@@ -149,7 +149,7 @@ func (s *Server) handleDeviceSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if detect && settings.ConnectEnabled {
-			if settings.OS == "linux" {
+			if settings.OS == "linux" || settings.OS == "windows" {
 				if settings.LinkSpeedMbps == 0 || forceDetect {
 					if s.logs != nil {
 						s.logs.Add("info", "ssh", fmt.Sprintf("auto-detect link speed for %s", id))
@@ -157,7 +157,7 @@ func (s *Server) handleDeviceSettings(w http.ResponseWriter, r *http.Request) {
 					speed, iface, detErr := sshutil.DetectLinkSpeed(settings, 8*time.Second)
 					if detErr != nil {
 						if s.logs != nil {
-							s.logs.Add("warn", "ssh", fmt.Sprintf("ethtool failed for %s: %v", id, detErr))
+							s.logs.Add("warn", "ssh", fmt.Sprintf("link speed detect failed for %s: %v", id, detErr))
 						}
 					} else if speed > 0 {
 						settings.LinkSpeedMbps = speed
@@ -194,11 +194,11 @@ func (s *Server) handleDeviceSettings(w http.ResponseWriter, r *http.Request) {
 		if s.logs != nil {
 			s.logs.Add("info", "settings", fmt.Sprintf("settings received for %s (connect=%t os=%s host=%s)", id, settings.ConnectEnabled, settings.OS, settings.Host))
 		}
-		if settings.ConnectEnabled && settings.OS == "linux" {
+		if settings.ConnectEnabled && (settings.OS == "linux" || settings.OS == "windows") {
 			speed, iface, err := sshutil.DetectLinkSpeed(settings, 8*time.Second)
 			if err != nil {
 				if s.logs != nil {
-					s.logs.Add("warn", "ssh", fmt.Sprintf("ethtool failed for %s: %v", id, err))
+					s.logs.Add("warn", "ssh", fmt.Sprintf("link speed detect failed for %s: %v", id, err))
 				}
 			} else if speed > 0 {
 				settings.LinkSpeedMbps = speed

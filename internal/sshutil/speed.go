@@ -1,8 +1,10 @@
 package sshutil
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"regexp"
 	"strconv"
@@ -14,9 +16,10 @@ import (
 	"inframap/internal/model"
 )
 
-var speedRegex = regexp.MustCompile(`(?i)([0-9]+(?:\.[0-9]+)?)\s*([mg]b/s)`)
+var speedRegex = regexp.MustCompile(`(?i)([0-9]+(?:\.[0-9]+)?)\s*([mg]b(?:/s|ps))`)
 
 func DetectLinkSpeed(settings model.DeviceSettings, timeout time.Duration) (int, string, error) {
+	osType := strings.ToLower(strings.TrimSpace(settings.OS))
 	host := strings.TrimSpace(settings.Host)
 	if host == "" {
 		return 0, "", errors.New("host is empty")
@@ -58,6 +61,10 @@ func DetectLinkSpeed(settings model.DeviceSettings, timeout time.Duration) (int,
 	}
 	client := ssh.NewClient(clientConn, chans, reqs)
 	defer client.Close()
+
+	if osType == "windows" {
+		return detectWindowsSpeed(client)
+	}
 
 	iface, err := runCommand(client, "sh -c \"ip route get 1.1.1.1 | sed -n 's/.* dev \\([^ ]*\\).*/\\1/p'\"")
 	if err != nil {
@@ -181,4 +188,82 @@ func parseSysfsSpeed(raw string) (int, error) {
 		return 0, errors.New("invalid speed")
 	}
 	return num, nil
+}
+
+func detectWindowsSpeed(client *ssh.Client) (int, string, error) {
+	cmd := "powershell -NoProfile -Command \"$route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1; $idx = $null; if ($route) { $idx = $route.InterfaceIndex }; $adapter = $null; if ($idx) { $adapter = Get-NetAdapter -InterfaceIndex $idx -ErrorAction SilentlyContinue }; if (-not $adapter) { $adapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Sort-Object LinkSpeed -Descending | Select-Object -First 1 }; if ($adapter) { [pscustomobject]@{Name=$adapter.Name; LinkSpeed=$adapter.LinkSpeed} | ConvertTo-Json -Compress }\""
+	output, err := runCommand(client, cmd)
+	if err != nil {
+		return 0, "", err
+	}
+	iface, speed, err := parseWindowsLinkSpeedJSON(output)
+	if err != nil {
+		iface, speed, textErr := parseWindowsLinkSpeed(output)
+		if textErr == nil {
+			return speed, iface, nil
+		}
+		return 0, "", err
+	}
+	return speed, iface, nil
+}
+
+func parseWindowsLinkSpeedJSON(raw string) (string, int, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", 0, errors.New("empty response")
+	}
+	var payload struct {
+		Name      string      `json:"Name"`
+		LinkSpeed interface{} `json:"LinkSpeed"`
+	}
+	if err := json.Unmarshal([]byte(value), &payload); err != nil {
+		return "", 0, err
+	}
+	if payload.LinkSpeed == nil {
+		return "", 0, errors.New("missing link speed")
+	}
+	switch v := payload.LinkSpeed.(type) {
+	case float64:
+		return payload.Name, bpsToMbps(v), nil
+	case string:
+		speed, err := parseSpeed(v)
+		if err != nil {
+			return "", 0, err
+		}
+		return payload.Name, speed, nil
+	default:
+		return "", 0, errors.New("unsupported link speed type")
+	}
+}
+
+func bpsToMbps(bps float64) int {
+	if bps <= 0 {
+		return 0
+	}
+	return int(math.Round(bps / 1_000_000))
+}
+
+func parseWindowsLinkSpeed(raw string) (string, int, error) {
+	lines := strings.Split(raw, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "---") || strings.Contains(trimmed, "LinkSpeed") {
+			continue
+		}
+		loc := speedRegex.FindStringIndex(trimmed)
+		if loc == nil {
+			continue
+		}
+		speedText := strings.TrimSpace(trimmed[loc[0]:loc[1]])
+		name := strings.TrimSpace(trimmed[:loc[0]])
+		if name == "" {
+			name = "adapter"
+		}
+		speed, err := parseSpeed(speedText)
+		if err != nil {
+			return "", 0, err
+		}
+		return name, speed, nil
+	}
+	return "", 0, errors.New("unable to parse windows link speed")
 }

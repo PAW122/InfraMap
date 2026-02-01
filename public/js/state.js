@@ -26,12 +26,17 @@ const logsModal = document.getElementById("logs-modal");
 const logsClose = document.getElementById("logs-close");
 const logsRefresh = document.getElementById("logs-refresh");
 const logsOutput = document.getElementById("logs-output");
+const tagsInput = document.getElementById("tags-input");
+const tagsAddBtn = document.getElementById("tags-add");
+const tagsList = document.getElementById("tags-list");
+const headerPosGrid = document.getElementById("header-pos-grid");
 
 const gridSize = 32;
 const zoomLimits = { min: 0.35, max: 2.5 };
 const networkDefaults = { width: 420, height: 260, color: "#1d6fa3" };
 const networkMinSize = { width: 200, height: 140 };
 const monitoringDefaults = { intervalSec: 30, showStatus: true };
+const networkHeaderPositions = ["tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br"];
 
 const typeLabels = {
   server: "SV",
@@ -103,13 +108,37 @@ function normalizeNode(node) {
       height: typeof node.height === "number" ? node.height : networkDefaults.height,
       networkPublicIp: typeof node.networkPublicIp === "string" ? node.networkPublicIp : "",
       color: typeof node.color === "string" ? node.color : networkDefaults.color,
+      networkHeaderPos: normalizeHeaderPos(node.networkHeaderPos),
     };
   }
   return {
     ...node,
     connectEnabled: node.connectEnabled === true,
+    isInfraMapServer: node.isInfraMapServer === true,
     linkSpeedMbps: typeof node.linkSpeedMbps === "number" ? node.linkSpeedMbps : 0,
+    tags: normalizeTags(node.tags),
   };
+}
+
+function normalizeTags(tags) {
+  if (!Array.isArray(tags)) return [];
+  const seen = new Set();
+  const result = [];
+  tags.forEach((tag) => {
+    if (typeof tag !== "string") return;
+    const value = tag.trim().replace(/\s+/g, " ");
+    if (!value) return;
+    const key = value.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    result.push(value);
+  });
+  return result;
+}
+
+function normalizeHeaderPos(value) {
+  const pos = typeof value === "string" ? value : "";
+  return networkHeaderPositions.includes(pos) ? pos : "tc";
 }
 
 function setStatus(message, tone = "neutral") {

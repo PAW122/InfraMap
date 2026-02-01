@@ -61,9 +61,12 @@ function setHelpForOS(os) {
   });
 }
 
-async function fetchDeviceSettings(id, detect = false) {
+async function fetchDeviceSettings(id, detect = false, force = false) {
   try {
-    const suffix = detect ? "?detect=1" : "";
+    const params = [];
+    if (detect) params.push("detect=1");
+    if (force) params.push("force=1");
+    const suffix = params.length ? `?${params.join("&")}` : "";
     const res = await fetch(`/api/device-settings/${id}${suffix}`);
     if (!res.ok) return { exists: false, settings: {} };
     return await res.json();
@@ -89,7 +92,7 @@ async function hydrateDeviceSettings(nodes) {
   const targets = nodes.filter((node) => node.type !== "network");
   if (!targets.length) return;
   const results = await Promise.all(
-    targets.map((node) => fetchDeviceSettings(node.id, true))
+    targets.map((node) => fetchDeviceSettings(node.id, true, true))
   );
   let changed = false;
   results.forEach((res, index) => {
@@ -132,6 +135,7 @@ async function openSettingsModal() {
   settingsForm.elements.showStatus.checked = settings.showStatus;
   settingsForm.elements.connectEnabled.checked =
     remoteSettings.connectEnabled === true || node.connectEnabled === true;
+  settingsForm.elements.isInfraMapServer.checked = node.isInfraMapServer === true;
   settingsForm.elements.os.value = remoteSettings.os || "linux";
   settingsForm.elements.host.value = remoteSettings.host || node.ipPublic || node.ipPrivate || "";
   settingsForm.elements.port.value = remoteSettings.port || "";
@@ -214,6 +218,7 @@ async function applySettingsFromForm() {
   node.pingIntervalSec = settings.intervalSec;
   node.pingShowStatus = settings.showStatus;
   node.connectEnabled = settingsForm.elements.connectEnabled.checked;
+  node.isInfraMapServer = settingsForm.elements.isInfraMapServer.checked;
   node.linkSpeedMbps = parseInt(settingsForm.elements.linkSpeedMbps.value, 10) || 0;
   updateNodeElement(node);
   updateStatusBadges();

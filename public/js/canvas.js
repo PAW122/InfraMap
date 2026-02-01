@@ -152,12 +152,21 @@ function buildNodeElement(node) {
 
     el.appendChild(header);
     el.appendChild(meta);
+    applyNetworkHeaderPosition(el, node);
     addResizeHandles(el, node.id);
   } else {
     const meta = document.createElement("div");
     meta.className = "node__meta";
     meta.appendChild(label);
+    if (node.isInfraMapServer) {
+      const badge = document.createElement("div");
+      badge.className = "node__badge";
+      badge.textContent = "InfraMap";
+      meta.appendChild(badge);
+    }
     meta.appendChild(ip);
+    const tagsWrap = buildTagsElement(node);
+    meta.appendChild(tagsWrap);
     el.appendChild(icon);
     el.appendChild(meta);
     const statusDot = document.createElement("div");
@@ -197,6 +206,30 @@ function buildIpLine(node) {
   return parts.length ? parts.join(" | ") : "no ip assigned";
 }
 
+function buildTagsElement(node) {
+  const wrap = document.createElement("div");
+  wrap.className = "node__tags";
+  updateTagsElement(wrap, node);
+  return wrap;
+}
+
+function updateTagsElement(wrap, node) {
+  if (!wrap) return;
+  const tags = Array.isArray(node.tags) ? node.tags : [];
+  wrap.innerHTML = "";
+  if (!tags.length) {
+    wrap.style.display = "none";
+    return;
+  }
+  wrap.style.display = "flex";
+  tags.forEach((tag) => {
+    const chip = document.createElement("div");
+    chip.className = "node__tag";
+    chip.textContent = tag;
+    wrap.appendChild(chip);
+  });
+}
+
 function applyNetworkStyles(el, node) {
   const base = typeof node.color === "string" && node.color ? node.color : networkDefaults.color;
   const bg = hexToRgba(base, 0.12);
@@ -208,6 +241,11 @@ function applyNetworkStyles(el, node) {
   if (meta) {
     meta.style.color = text;
   }
+}
+
+function applyNetworkHeaderPosition(el, node) {
+  const pos = normalizeHeaderPos(node.networkHeaderPos);
+  el.dataset.headerPos = pos;
 }
 
 function hexToRgba(hex, alpha) {
@@ -254,6 +292,8 @@ function updatePropsForm() {
       el.disabled = true;
     });
     deleteBtn.disabled = true;
+    renderTagsList(null);
+    updateHeaderPosPicker(null);
     if (lockBtn) lockBtn.disabled = true;
     if (layerUpBtn) layerUpBtn.disabled = true;
     if (layerDownBtn) layerDownBtn.disabled = true;
@@ -296,6 +336,8 @@ function updatePropsForm() {
     propsForm.elements.height.value = node.height || "";
   }
   propsForm.elements.notes.value = node.notes || "";
+  renderTagsList(node);
+  updateHeaderPosPicker(node);
   if (lockBtn) {
     const label = lockBtn.querySelector(".btn__label");
     if (label) {
@@ -383,7 +425,9 @@ function addNode(type) {
     ipPublic: "",
     notes: "",
     connectEnabled: false,
+    isInfraMapServer: false,
     linkSpeedMbps: 0,
+    tags: [],
   };
   if (type === "network") {
     node.label = `LAN-${state.board.nodes.filter((n) => n.type === "network").length + 1}`;
@@ -391,6 +435,7 @@ function addNode(type) {
     node.height = 280;
     node.networkPublicIp = "";
     node.color = networkDefaults.color;
+    node.networkHeaderPos = "tc";
   }
   state.board.nodes.push(node);
   renderAll();
@@ -659,6 +704,71 @@ propsForm.addEventListener("submit", (event) => {
   event.preventDefault();
 });
 
+function addTagsFromInput() {
+  const node = getSelectedNode();
+  if (!node || node.type === "network") return;
+  if (!tagsInput) return;
+  const raw = tagsInput.value || "";
+  const parts = raw
+    .split(",")
+    .map((value) => value.trim().replace(/\s+/g, " "))
+    .filter(Boolean);
+  if (!parts.length) return;
+  const existing = Array.isArray(node.tags) ? node.tags.slice() : [];
+  const seen = new Set(existing.map((tag) => tag.toLowerCase()));
+  let changed = false;
+  parts.forEach((tag) => {
+    const key = tag.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    existing.push(tag);
+    changed = true;
+  });
+  if (!changed) return;
+  node.tags = existing;
+  if (tagsInput) tagsInput.value = "";
+  updateNodeElement(node);
+  renderTagsList(node);
+  recordHistory();
+}
+
+function renderTagsList(node) {
+  if (!tagsList) return;
+  tagsList.innerHTML = "";
+  if (!node || node.type === "network") return;
+  const tags = Array.isArray(node.tags) ? node.tags : [];
+  if (!tags.length) {
+    const empty = document.createElement("div");
+    empty.className = "tags-empty";
+    empty.textContent = "No tags";
+    tagsList.appendChild(empty);
+    return;
+  }
+  tags.forEach((tag) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "tag";
+    btn.dataset.tag = tag;
+    const label = document.createElement("span");
+    label.textContent = tag;
+    const remove = document.createElement("span");
+    remove.className = "tag__remove";
+    remove.textContent = "×";
+    btn.appendChild(label);
+    btn.appendChild(remove);
+    tagsList.appendChild(btn);
+  });
+}
+
+function updateHeaderPosPicker(node) {
+  if (!headerPosGrid) return;
+  const isNetwork = node && node.type === "network";
+  const pos = isNetwork ? normalizeHeaderPos(node.networkHeaderPos) : "";
+  headerPosGrid.querySelectorAll(".pos-btn").forEach((btn) => {
+    btn.classList.toggle("is-active", isNetwork && btn.dataset.pos === pos);
+  });
+}
+
 function updateNodeElement(node) {
   const nodeEl = world.querySelector(`[data-id="${node.id}"]`);
   if (!nodeEl) return;
@@ -674,19 +784,42 @@ function updateNodeElement(node) {
   const icon = nodeEl.querySelector(".node__icon");
   const label = nodeEl.querySelector(".node__label");
   const ip = nodeEl.querySelector(".node__ip");
+  const meta = nodeEl.querySelector(".node__meta");
   if (node.type === "network") {
     const width = typeof node.width === "number" ? node.width : networkDefaults.width;
     const height = typeof node.height === "number" ? node.height : networkDefaults.height;
     nodeEl.style.width = `${width}px`;
     nodeEl.style.height = `${height}px`;
     applyNetworkStyles(nodeEl, node);
+    applyNetworkHeaderPosition(nodeEl, node);
   } else {
     nodeEl.style.width = "";
     nodeEl.style.height = "";
+    nodeEl.dataset.headerPos = "";
   }
   if (icon) icon.textContent = typeLabels[node.type] || "SV";
   if (label) label.textContent = node.label || "Untitled";
   if (ip) ip.textContent = buildIpLine(node);
+  if (meta && node.type !== "network") {
+    const existingBadge = meta.querySelector(".node__badge");
+    if (node.isInfraMapServer) {
+      if (!existingBadge) {
+        const badge = document.createElement("div");
+        badge.className = "node__badge";
+        badge.textContent = "InfraMap";
+        meta.insertBefore(badge, ip || null);
+      }
+    } else if (existingBadge) {
+      existingBadge.remove();
+    }
+    let tagsWrap = meta.querySelector(".node__tags");
+    if (!tagsWrap) {
+      tagsWrap = buildTagsElement(node);
+      meta.appendChild(tagsWrap);
+    } else {
+      updateTagsElement(tagsWrap, node);
+    }
+  }
   if (node.type !== "network") {
     applyStatusToNode(node, nodeEl);
   } else {
@@ -1047,6 +1180,43 @@ if (settingsForm) {
 }
 
 deleteBtn.addEventListener("click", () => deleteSelected());
+if (tagsAddBtn) {
+  tagsAddBtn.addEventListener("click", () => addTagsFromInput());
+}
+if (tagsInput) {
+  tagsInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addTagsFromInput();
+    }
+  });
+}
+if (tagsList) {
+  tagsList.addEventListener("click", (event) => {
+    const btn = event.target.closest(".tag");
+    if (!btn) return;
+    const node = getSelectedNode();
+    if (!node || node.type === "network") return;
+    const tag = btn.dataset.tag;
+    if (!tag) return;
+    node.tags = (node.tags || []).filter((value) => value !== tag);
+    updateNodeElement(node);
+    renderTagsList(node);
+    recordHistory();
+  });
+}
+if (headerPosGrid) {
+  headerPosGrid.addEventListener("click", (event) => {
+    const btn = event.target.closest(".pos-btn");
+    if (!btn) return;
+    const node = getSelectedNode();
+    if (!node || node.type !== "network") return;
+    node.networkHeaderPos = btn.dataset.pos;
+    updateNodeElement(node);
+    updateHeaderPosPicker(node);
+    recordHistory();
+  });
+}
 lockBtn.addEventListener("click", () => {
   const node = getSelectedNode();
   if (!node) return;

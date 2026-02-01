@@ -120,6 +120,16 @@
                 Public IP (Node)
                 <input type="text" name="ipPublic" placeholder="203.0.113.10" />
               </label>
+              <label>
+                Tags
+                <div class="tags-input-row">
+                  <input id="tags-input" type="text" placeholder="DNS, DB" />
+                  <button id="tags-add" class="btn btn--ghost btn--tiny" type="button">
+                    Add
+                  </button>
+                </div>
+              </label>
+              <div id="tags-list" class="tags-list"></div>
             </div>
             <div class="field-group" data-group="network">
               <label>
@@ -129,6 +139,20 @@
               <label>
                 Color
                 <input type="color" name="color" />
+              </label>
+              <label>
+                Header position
+                <div id="header-pos-grid" class="pos-grid" role="group" aria-label="Header position">
+                  <button class="pos-btn" type="button" data-pos="tl" aria-label="Top left"></button>
+                  <button class="pos-btn" type="button" data-pos="tc" aria-label="Top center"></button>
+                  <button class="pos-btn" type="button" data-pos="tr" aria-label="Top right"></button>
+                  <button class="pos-btn" type="button" data-pos="ml" aria-label="Middle left"></button>
+                  <button class="pos-btn" type="button" data-pos="mc" aria-label="Middle center"></button>
+                  <button class="pos-btn" type="button" data-pos="mr" aria-label="Middle right"></button>
+                  <button class="pos-btn" type="button" data-pos="bl" aria-label="Bottom left"></button>
+                  <button class="pos-btn" type="button" data-pos="bc" aria-label="Bottom center"></button>
+                  <button class="pos-btn" type="button" data-pos="br" aria-label="Bottom right"></button>
+                </div>
               </label>
               <label>
                 Width
@@ -180,6 +204,10 @@
           <label class="toggle">
             <input type="checkbox" name="connectEnabled" />
             <span>Enable device connection (SSH)</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" name="isInfraMapServer" />
+            <span>Mark as InfraMap server</span>
           </label>
           <label>
             OS type
