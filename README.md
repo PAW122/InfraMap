@@ -23,6 +23,13 @@ go run .
 
 Open: `http://localhost:8080`
 
+### Config
+Create `.env` and set the port:
+
+```
+PORT=8080
+```
+
 ## Data files
 - `data/board.json` - canvas layout, nodes, links
 - `data/secrets.json` - encrypted device credentials/settings
