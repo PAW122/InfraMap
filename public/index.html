@@ -22,8 +22,10 @@
           <button class="btn btn--ghost" data-add="router">Add Router</button>
           <button class="btn btn--ghost" data-add="switch">Add Switch</button>
           <button class="btn btn--ghost" data-add="cloud">Add Cloud</button>
+          <button class="btn btn--ghost" data-add="network">Add Network</button>
         </div>
         <div class="toolbar toolbar--actions">
+          <div id="dirty-indicator" class="dirty-indicator is-hidden" aria-live="polite"></div>
           <button id="save-btn" class="btn btn--primary">Save JSON</button>
           <button id="reload-btn" class="btn btn--ghost">Reload</button>
         </div>
@@ -47,7 +49,19 @@
         </section>
         <aside class="panel">
           <div class="panel__header">
-            <h2>Properties</h2>
+            <div class="panel__title-row">
+              <h2>Properties</h2>
+              <button id="lock-btn" class="btn btn--ghost btn--lock btn--icon" type="button" aria-pressed="false">
+                <span class="btn__icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" role="presentation">
+                    <path
+                      d="M7 10V7.5C7 5.02 9.02 3 11.5 3S16 5.02 16 7.5V10h1.5c.83 0 1.5.67 1.5 1.5v7c0 .83-.67 1.5-1.5 1.5h-9c-.83 0-1.5-.67-1.5-1.5v-7C6 10.67 6.67 10 7.5 10H7zm2 0h5V7.5C14 6.12 12.88 5 11.5 5S9 6.12 9 7.5V10z"
+                    />
+                  </svg>
+                </span>
+                <span class="btn__label">Lock</span>
+              </button>
+            </div>
             <div id="status" class="status">Ready.</div>
           </div>
           <form id="props-form" class="props">
@@ -63,20 +77,41 @@
                 <option value="router">Router</option>
                 <option value="switch">Switch</option>
                 <option value="cloud">Cloud</option>
+                <option value="network">Network</option>
               </select>
             </label>
-            <label>
-              Network
-              <input type="text" name="network" placeholder="LAN-1 / WAN / Cloud" />
-            </label>
-            <label>
-              Private IP
-              <input type="text" name="ipPrivate" placeholder="10.0.0.10" />
-            </label>
-            <label>
-              Public IP
-              <input type="text" name="ipPublic" placeholder="203.0.113.10" />
-            </label>
+            <div class="field-group" data-group="node">
+              <label>
+                Network
+                <input type="text" name="network" placeholder="LAN-1 / WAN / Cloud" />
+              </label>
+              <label>
+                Private IP
+                <input type="text" name="ipPrivate" placeholder="10.0.0.10" />
+              </label>
+              <label>
+                Public IP (Node)
+                <input type="text" name="ipPublic" placeholder="203.0.113.10" />
+              </label>
+            </div>
+            <div class="field-group" data-group="network">
+              <label>
+                Public IP (Network)
+                <input type="text" name="networkPublicIp" placeholder="203.0.113.0/24" />
+              </label>
+              <label>
+                Color
+                <input type="color" name="color" />
+              </label>
+              <label>
+                Width
+                <input type="number" name="width" min="120" step="20" />
+              </label>
+              <label>
+                Height
+                <input type="number" name="height" min="120" step="20" />
+              </label>
+            </div>
             <label>
               Notes
               <textarea name="notes" rows="4" placeholder="Role, OS, services"></textarea>

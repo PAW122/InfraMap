@@ -3,15 +3,19 @@ const world = document.getElementById("world");
 const statusEl = document.getElementById("status");
 const propsForm = document.getElementById("props-form");
 const deleteBtn = document.getElementById("delete-btn");
+const lockBtn = document.getElementById("lock-btn");
 const saveBtn = document.getElementById("save-btn");
 const reloadBtn = document.getElementById("reload-btn");
 const zoomOutBtn = document.getElementById("zoom-out");
 const zoomInBtn = document.getElementById("zoom-in");
 const zoomLevel = document.getElementById("zoom-level");
 const centerViewBtn = document.getElementById("center-view");
+const dirtyIndicator = document.getElementById("dirty-indicator");
 
 const gridSize = 32;
 const zoomLimits = { min: 0.35, max: 2.5 };
+const networkDefaults = { width: 420, height: 260, color: "#1d6fa3" };
+const networkMinSize = { width: 200, height: 140 };
 
 const typeLabels = {
   server: "SV",
@@ -19,12 +23,14 @@ const typeLabels = {
   router: "RT",
   switch: "SW",
   cloud: "CL",
+  network: "NW",
 };
 
 const state = {
   board: createEmptyBoard(),
   selectedId: null,
   dragging: null,
+  dirty: false,
 };
 
 function createEmptyBoard() {
@@ -48,18 +54,46 @@ function normalizeBoard(data) {
     y: typeof viewport.y === "number" ? viewport.y : 0,
     zoom: typeof viewport.zoom === "number" ? viewport.zoom : 1,
   };
+  const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+  const normalizedNodes = nodes.map((node) => normalizeNode(node));
   return {
     version: data.version || 1,
     meta: data.meta || { name: "InfraMap", updatedAt: new Date().toISOString() },
     viewport: safeViewport,
-    nodes: Array.isArray(data.nodes) ? data.nodes : [],
+    nodes: normalizedNodes,
     links: Array.isArray(data.links) ? data.links : [],
   };
+}
+
+function normalizeNode(node) {
+  if (!node || typeof node !== "object") return node;
+  if (node.type === "network") {
+    return {
+      ...node,
+      width: typeof node.width === "number" ? node.width : networkDefaults.width,
+      height: typeof node.height === "number" ? node.height : networkDefaults.height,
+      networkPublicIp: typeof node.networkPublicIp === "string" ? node.networkPublicIp : "",
+      color: typeof node.color === "string" ? node.color : networkDefaults.color,
+    };
+  }
+  return node;
 }
 
 function setStatus(message, tone = "neutral") {
   statusEl.textContent = message;
   statusEl.dataset.tone = tone;
+}
+
+function setDirty(isDirty) {
+  state.dirty = isDirty;
+  if (!dirtyIndicator) return;
+  if (isDirty) {
+    dirtyIndicator.textContent = "Unsaved changes";
+    dirtyIndicator.classList.remove("is-hidden");
+  } else {
+    dirtyIndicator.textContent = "";
+    dirtyIndicator.classList.add("is-hidden");
+  }
 }
 
 function clamp(value, min, max) {
@@ -126,12 +160,16 @@ function setZoom(zoom, clientX, clientY) {
   viewport.y = before.y - (sy - cy) / viewport.zoom;
   updateViewport();
 }
+
 function renderAll() {
   world.innerHTML = "";
-  state.board.nodes.forEach((node) => {
+  const networks = state.board.nodes.filter((node) => node.type === "network");
+  const others = state.board.nodes.filter((node) => node.type !== "network");
+  [...networks, ...others].forEach((node) => {
     const el = buildNodeElement(node);
     world.appendChild(el);
   });
+  assignNodesToNetworks();
   applySelection();
   updatePropsForm();
   updateViewport();
@@ -140,16 +178,23 @@ function renderAll() {
 function buildNodeElement(node) {
   const el = document.createElement("div");
   el.className = `node node--${node.type || "server"}`;
+  if (node.locked) {
+    el.classList.add("locked");
+  }
   el.dataset.id = node.id;
   el.style.left = `${node.x || 0}px`;
   el.style.top = `${node.y || 0}px`;
+  if (node.type === "network") {
+    const width = typeof node.width === "number" ? node.width : networkDefaults.width;
+    const height = typeof node.height === "number" ? node.height : networkDefaults.height;
+    el.style.width = `${width}px`;
+    el.style.height = `${height}px`;
+    applyNetworkStyles(el, node);
+  }
 
   const icon = document.createElement("div");
   icon.className = "node__icon";
   icon.textContent = typeLabels[node.type] || "SV";
-
-  const meta = document.createElement("div");
-  meta.className = "node__meta";
 
   const label = document.createElement("div");
   label.className = "node__label";
@@ -159,15 +204,33 @@ function buildNodeElement(node) {
   ip.className = "node__ip";
   ip.textContent = buildIpLine(node);
 
-  meta.appendChild(label);
-  meta.appendChild(ip);
-  el.appendChild(icon);
-  el.appendChild(meta);
+  if (node.type === "network") {
+    const header = document.createElement("div");
+    header.className = "network-header";
+    header.appendChild(icon);
+    header.appendChild(label);
+
+    const meta = document.createElement("div");
+    meta.className = "network-meta";
+    meta.appendChild(ip);
+
+    el.appendChild(header);
+    el.appendChild(meta);
+    addResizeHandles(el, node.id);
+  } else {
+    const meta = document.createElement("div");
+    meta.className = "node__meta";
+    meta.appendChild(label);
+    meta.appendChild(ip);
+    el.appendChild(icon);
+    el.appendChild(meta);
+  }
 
   el.addEventListener("mousedown", (event) => {
     if (event.button !== 0) return;
     event.stopPropagation();
     selectNode(node.id);
+    if (node.locked) return;
     startDrag(event, node.id);
   });
 
@@ -180,10 +243,37 @@ function buildNodeElement(node) {
 }
 
 function buildIpLine(node) {
+  if (node.type === "network") {
+    return node.networkPublicIp
+      ? `public ${node.networkPublicIp}`
+      : "no public ip";
+  }
   const parts = [];
   if (node.ipPrivate) parts.push(`priv ${node.ipPrivate}`);
   if (node.ipPublic) parts.push(`pub ${node.ipPublic}`);
   return parts.length ? parts.join(" | ") : "no ip assigned";
+}
+
+function applyNetworkStyles(el, node) {
+  const base = typeof node.color === "string" && node.color ? node.color : networkDefaults.color;
+  const bg = hexToRgba(base, 0.12);
+  const border = hexToRgba(base, 0.55);
+  const text = hexToRgba(base, 0.9);
+  el.style.backgroundColor = bg;
+  el.style.borderColor = border;
+  const meta = el.querySelector(".network-meta");
+  if (meta) {
+    meta.style.color = text;
+  }
+}
+
+function hexToRgba(hex, alpha) {
+  const value = hex.replace("#", "");
+  if (value.length !== 6) return `rgba(29, 111, 163, ${alpha})`;
+  const r = parseInt(value.slice(0, 2), 16);
+  const g = parseInt(value.slice(2, 4), 16);
+  const b = parseInt(value.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 function applySelection() {
@@ -221,16 +311,56 @@ function updatePropsForm() {
       el.disabled = true;
     });
     deleteBtn.disabled = true;
+    if (lockBtn) lockBtn.disabled = true;
+    if (lockBtn) {
+      lockBtn.classList.remove("btn--primary");
+      lockBtn.classList.add("btn--ghost");
+    }
+    propsForm.dataset.mode = "none";
     return;
   }
 
   inputs.forEach((el) => (el.disabled = false));
+  if (lockBtn) lockBtn.disabled = false;
+  propsForm.dataset.mode = node.type === "network" ? "network" : "node";
   propsForm.elements.label.value = node.label || "";
   propsForm.elements.type.value = node.type || "server";
-  propsForm.elements.network.value = node.network || "";
-  propsForm.elements.ipPrivate.value = node.ipPrivate || "";
-  propsForm.elements.ipPublic.value = node.ipPublic || "";
+  if (propsForm.elements.network) {
+    propsForm.elements.network.value = node.network || "";
+  }
+  if (propsForm.elements.ipPrivate) {
+    propsForm.elements.ipPrivate.value = node.ipPrivate || "";
+  }
+  if (propsForm.elements.ipPublic) {
+    propsForm.elements.ipPublic.value = node.ipPublic || "";
+  }
+  if (propsForm.elements.networkPublicIp) {
+    propsForm.elements.networkPublicIp.value = node.networkPublicIp || "";
+  }
+  if (propsForm.elements.color) {
+    propsForm.elements.color.value = node.color || networkDefaults.color;
+  }
+  if (propsForm.elements.width) {
+    propsForm.elements.width.value = node.width || "";
+  }
+  if (propsForm.elements.height) {
+    propsForm.elements.height.value = node.height || "";
+  }
   propsForm.elements.notes.value = node.notes || "";
+  if (lockBtn) {
+    const label = lockBtn.querySelector(".btn__label");
+    if (label) {
+      label.textContent = node.locked ? "Unlock" : "Lock";
+    }
+    lockBtn.setAttribute("aria-pressed", node.locked ? "true" : "false");
+    if (node.locked) {
+      lockBtn.classList.add("btn--primary");
+      lockBtn.classList.remove("btn--ghost");
+    } else {
+      lockBtn.classList.remove("btn--primary");
+      lockBtn.classList.add("btn--ghost");
+    }
+  }
 }
 
 function getSelectedNode() {
@@ -247,6 +377,9 @@ function startDrag(event, id) {
     id,
     offsetX: point.x - node.x,
     offsetY: point.y - node.y,
+    startX: node.x,
+    startY: node.y,
+    moved: false,
   };
   window.addEventListener("mousemove", onDrag);
   window.addEventListener("mouseup", stopDrag);
@@ -261,14 +394,23 @@ function onDrag(event) {
   const point = screenToWorld(event.clientX, event.clientY);
   node.x = point.x - offsetX;
   node.y = point.y - offsetY;
+  if (Math.abs(node.x - state.dragging.startX) > 1 || Math.abs(node.y - state.dragging.startY) > 1) {
+    state.dragging.moved = true;
+  }
   nodeEl.style.left = `${node.x}px`;
   nodeEl.style.top = `${node.y}px`;
 }
 
 function stopDrag() {
+  const moved = state.dragging && state.dragging.moved;
   state.dragging = null;
   window.removeEventListener("mousemove", onDrag);
   window.removeEventListener("mouseup", stopDrag);
+  assignNodesToNetworks();
+  updatePropsForm();
+  if (moved) {
+    setDirty(true);
+  }
 }
 
 function addNode(type) {
@@ -286,9 +428,17 @@ function addNode(type) {
     ipPublic: "",
     notes: "",
   };
+  if (type === "network") {
+    node.label = `LAN-${state.board.nodes.filter((n) => n.type === "network").length + 1}`;
+    node.width = 480;
+    node.height = 280;
+    node.networkPublicIp = "";
+    node.color = networkDefaults.color;
+  }
   state.board.nodes.push(node);
   renderAll();
   selectNode(id);
+  setDirty(true);
 }
 
 function deleteSelected() {
@@ -296,6 +446,7 @@ function deleteSelected() {
   state.board.nodes = state.board.nodes.filter((n) => n.id !== state.selectedId);
   state.selectedId = null;
   renderAll();
+  setDirty(true);
 }
 
 async function loadBoard() {
@@ -307,10 +458,12 @@ async function loadBoard() {
     state.board = normalizeBoard(data);
     setStatus("Board loaded.", "success");
     renderAll();
+    setDirty(false);
   } catch (err) {
     setStatus("Could not load board. Using blank canvas.", "warn");
     state.board = createEmptyBoard();
     renderAll();
+    setDirty(false);
   }
 }
 
@@ -326,6 +479,7 @@ async function saveBoard() {
     });
     if (!res.ok) throw new Error("failed");
     setStatus("Saved to data/board.json.", "success");
+    setDirty(false);
   } catch (err) {
     setStatus("Save failed. Check server logs.", "error");
   }
@@ -334,7 +488,7 @@ async function saveBoard() {
 let panState = null;
 
 function startPan(event) {
-  if (event.button !== 0) return;
+  if (event.button !== 0 && event.button !== 2) return;
   const viewport = getViewport();
   panState = {
     startX: event.clientX,
@@ -368,6 +522,8 @@ function stopPan() {
   window.removeEventListener("mouseup", stopPan);
   if (!didMove) {
     selectNode(null);
+  } else {
+    setDirty(true);
   }
 }
 
@@ -376,6 +532,108 @@ function onWheel(event) {
   const viewport = getViewport();
   const zoomFactor = Math.exp(-event.deltaY * 0.001);
   setZoom(viewport.zoom * zoomFactor, event.clientX, event.clientY);
+  setDirty(true);
+}
+
+let resizeState = null;
+
+function addResizeHandles(el, id) {
+  const dirs = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
+  dirs.forEach((dir) => {
+    const handle = document.createElement("div");
+    handle.className = "resize-handle";
+    handle.dataset.dir = dir;
+    handle.addEventListener("mousedown", (event) => {
+      event.stopPropagation();
+      event.preventDefault();
+      startResize(event, id, dir);
+    });
+    el.appendChild(handle);
+  });
+}
+
+function startResize(event, id, dir) {
+  const node = state.board.nodes.find((n) => n.id === id);
+  if (!node) return;
+  if (node.locked) return;
+  const point = screenToWorld(event.clientX, event.clientY);
+  resizeState = {
+    id,
+    dir,
+    startX: node.x || 0,
+    startY: node.y || 0,
+    startWidth: node.width || networkDefaults.width,
+    startHeight: node.height || networkDefaults.height,
+    startPoint: point,
+    moved: false,
+  };
+  window.addEventListener("mousemove", onResizeMove);
+  window.addEventListener("mouseup", stopResize);
+}
+
+function onResizeMove(event) {
+  if (!resizeState) return;
+  const node = state.board.nodes.find((n) => n.id === resizeState.id);
+  if (!node) return;
+  const point = screenToWorld(event.clientX, event.clientY);
+  const dx = point.x - resizeState.startPoint.x;
+  const dy = point.y - resizeState.startPoint.y;
+  if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+    resizeState.moved = true;
+  }
+
+  let width = resizeState.startWidth;
+  let height = resizeState.startHeight;
+  let x = resizeState.startX;
+  let y = resizeState.startY;
+
+  if (resizeState.dir.includes("e")) {
+    width += dx;
+  }
+  if (resizeState.dir.includes("s")) {
+    height += dy;
+  }
+  if (resizeState.dir.includes("w")) {
+    width -= dx;
+    x += dx;
+  }
+  if (resizeState.dir.includes("n")) {
+    height -= dy;
+    y += dy;
+  }
+
+  if (width < networkMinSize.width) {
+    const delta = networkMinSize.width - width;
+    width = networkMinSize.width;
+    if (resizeState.dir.includes("w")) {
+      x -= delta;
+    }
+  }
+  if (height < networkMinSize.height) {
+    const delta = networkMinSize.height - height;
+    height = networkMinSize.height;
+    if (resizeState.dir.includes("n")) {
+      y -= delta;
+    }
+  }
+
+  node.x = x;
+  node.y = y;
+  node.width = width;
+  node.height = height;
+  updateNodeElement(node);
+}
+
+function stopResize() {
+  const moved = resizeState && resizeState.moved;
+  resizeState = null;
+  window.removeEventListener("mousemove", onResizeMove);
+  window.removeEventListener("mouseup", stopResize);
+  assignNodesToNetworks();
+  updatePropsForm();
+  if (moved) {
+    setDirty(true);
+  }
 }
 
 propsForm.addEventListener("input", (event) => {
@@ -383,8 +641,36 @@ propsForm.addEventListener("input", (event) => {
   if (!node) return;
   const field = event.target.name;
   if (!field) return;
-  node[field] = event.target.value;
+  if (field === "width" || field === "height") {
+    const value = parseFloat(event.target.value);
+    node[field] = Number.isFinite(value) ? value : 0;
+    if (field === "width") {
+      node.width = Math.max(networkMinSize.width, node.width);
+    }
+    if (field === "height") {
+      node.height = Math.max(networkMinSize.height, node.height);
+    }
+  } else {
+    node[field] = event.target.value;
+  }
+  if (field === "type") {
+    if (node.type === "network") {
+      node.width = typeof node.width === "number" ? node.width : networkDefaults.width;
+      node.height = typeof node.height === "number" ? node.height : networkDefaults.height;
+      node.networkPublicIp = node.networkPublicIp || "";
+      node.color = node.color || networkDefaults.color;
+    }
+    renderAll();
+    selectNode(node.id);
+    setDirty(true);
+    return;
+  }
   updateNodeElement(node);
+  if (node.type === "network" || field === "label") {
+    assignNodesToNetworks();
+    updatePropsForm();
+  }
+  setDirty(true);
 });
 
 propsForm.addEventListener("submit", (event) => {
@@ -395,22 +681,100 @@ function updateNodeElement(node) {
   const nodeEl = world.querySelector(`[data-id="${node.id}"]`);
   if (!nodeEl) return;
   nodeEl.className = `node node--${node.type || "server"}`;
+  if (node.locked) {
+    nodeEl.classList.add("locked");
+  }
+  nodeEl.style.left = `${node.x || 0}px`;
+  nodeEl.style.top = `${node.y || 0}px`;
   if (node.id === state.selectedId) nodeEl.classList.add("selected");
   const icon = nodeEl.querySelector(".node__icon");
   const label = nodeEl.querySelector(".node__label");
   const ip = nodeEl.querySelector(".node__ip");
+  if (node.type === "network") {
+    const width = typeof node.width === "number" ? node.width : networkDefaults.width;
+    const height = typeof node.height === "number" ? node.height : networkDefaults.height;
+    nodeEl.style.width = `${width}px`;
+    nodeEl.style.height = `${height}px`;
+    applyNetworkStyles(nodeEl, node);
+  } else {
+    nodeEl.style.width = "";
+    nodeEl.style.height = "";
+  }
   if (icon) icon.textContent = typeLabels[node.type] || "SV";
   if (label) label.textContent = node.label || "Untitled";
   if (ip) ip.textContent = buildIpLine(node);
 }
 
+function assignNodesToNetworks() {
+  const networks = state.board.nodes.filter((n) => n.type === "network");
+  if (!networks.length) {
+    state.board.nodes.forEach((node) => {
+      if (node.type !== "network") {
+        node.networkId = null;
+        node.network = "";
+      }
+    });
+    return;
+  }
+
+  state.board.nodes.forEach((node) => {
+    if (node.type === "network") return;
+    const center = getNodeCenter(node);
+    const matching = networks.find((net) => {
+      const bounds = getNetworkBounds(net);
+      return (
+        center.x >= bounds.x &&
+        center.x <= bounds.x + bounds.width &&
+        center.y >= bounds.y &&
+        center.y <= bounds.y + bounds.height
+      );
+    });
+    if (matching) {
+      node.networkId = matching.id;
+      node.network = matching.label || matching.id;
+    } else {
+      node.networkId = null;
+      node.network = "";
+    }
+  });
+}
+
+function getNetworkBounds(net) {
+  const width = typeof net.width === "number" ? net.width : 420;
+  const height = typeof net.height === "number" ? net.height : 260;
+  return {
+    x: typeof net.x === "number" ? net.x : 0,
+    y: typeof net.y === "number" ? net.y : 0,
+    width,
+    height,
+  };
+}
+
+function getNodeCenter(node) {
+  const nodeEl = world.querySelector(`[data-id="${node.id}"]`);
+  const width = nodeEl ? nodeEl.offsetWidth : 150;
+  const height = nodeEl ? nodeEl.offsetHeight : 70;
+  return {
+    x: (node.x || 0) + width / 2,
+    y: (node.y || 0) + height / 2,
+  };
+}
+
 canvas.addEventListener("mousedown", (event) => {
-  if (event.target === canvas || event.target === world) {
+  if (event.button === 2) {
+    event.preventDefault();
+    startPan(event);
+    return;
+  }
+  if (event.button === 0 && (event.target === canvas || event.target === world)) {
     startPan(event);
   }
 });
 
 canvas.addEventListener("wheel", onWheel, { passive: false });
+canvas.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
+});
 window.addEventListener("resize", updateViewport);
 
 document.querySelectorAll("[data-add]").forEach((btn) => {
@@ -420,15 +784,25 @@ document.querySelectorAll("[data-add]").forEach((btn) => {
 });
 
 deleteBtn.addEventListener("click", () => deleteSelected());
+lockBtn.addEventListener("click", () => {
+  const node = getSelectedNode();
+  if (!node) return;
+  node.locked = !node.locked;
+  updateNodeElement(node);
+  updatePropsForm();
+  setDirty(true);
+});
 saveBtn.addEventListener("click", () => saveBoard());
 reloadBtn.addEventListener("click", () => loadBoard());
 zoomOutBtn.addEventListener("click", () => {
   const viewport = getViewport();
   setZoom(viewport.zoom * 0.9);
+  setDirty(true);
 });
 zoomInBtn.addEventListener("click", () => {
   const viewport = getViewport();
   setZoom(viewport.zoom * 1.1);
+  setDirty(true);
 });
 centerViewBtn.addEventListener("click", () => {
   const viewport = getViewport();
@@ -436,6 +810,7 @@ centerViewBtn.addEventListener("click", () => {
   viewport.y = 0;
   viewport.zoom = 1;
   updateViewport();
+  setDirty(true);
 });
 
 loadBoard();

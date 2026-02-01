@@ -93,6 +93,27 @@ code {
   justify-content: flex-end;
 }
 
+.dirty-indicator {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px dashed rgba(240, 90, 40, 0.5);
+  background: rgba(240, 90, 40, 0.08);
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.dirty-indicator.is-hidden {
+  opacity: 0;
+  border-color: transparent;
+  background: transparent;
+  padding: 0;
+  min-width: 0;
+}
+
 .btn {
   border: 1px solid rgba(28, 29, 33, 0.15);
   background: #fff;
@@ -102,6 +123,38 @@ code {
   font-weight: 600;
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.btn--lock {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn--icon {
+  padding: 6px 12px;
+}
+
+.btn--lock.btn--primary {
+  color: #fff;
+  border-color: transparent;
+  background: var(--accent);
+}
+
+.btn--lock.btn--primary .btn__icon svg {
+  fill: #fff;
+}
+
+.btn__icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+}
+
+.btn__icon svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
 }
 
 .btn:hover {
@@ -227,6 +280,13 @@ code {
   gap: 8px;
 }
 
+.panel__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .panel h2 {
   margin: 0;
 }
@@ -252,6 +312,17 @@ code {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.field-group {
+  display: none;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.props[data-mode="node"] [data-group="node"],
+.props[data-mode="network"] [data-group="network"] {
+  display: flex;
 }
 
 .props label {
@@ -298,6 +369,7 @@ code {
   align-items: center;
   gap: 10px;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
+  z-index: 2;
 }
 
 .canvas .node:active {
@@ -353,9 +425,141 @@ code {
   background: #9b6ad6;
 }
 
+.node--network {
+  min-width: 280px;
+  min-height: 180px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(29, 111, 163, 0.08);
+  border: 2px dashed rgba(29, 111, 163, 0.45);
+  box-shadow: none;
+  display: block;
+  cursor: grab;
+  z-index: 1;
+}
+
+.node--network .network-header {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 999px;
+  box-shadow: 0 8px 16px rgba(28, 29, 33, 0.12);
+}
+
+.node--network .node__label {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.node--network .node__icon {
+  background: var(--accent-2);
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  font-size: 10px;
+}
+
+.node--network .network-meta {
+  position: absolute;
+  top: 54px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-2);
+}
+
+.node--network .node__ip {
+  color: inherit;
+}
+
+.node--network .resize-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: #fff;
+  border: 1px solid rgba(28, 29, 33, 0.2);
+  border-radius: 50%;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 3;
+}
+
+.node--network:hover .resize-handle,
+.node--network.selected .resize-handle {
+  opacity: 1;
+}
+
+.resize-handle[data-dir="n"] {
+  top: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  cursor: ns-resize;
+}
+
+.resize-handle[data-dir="s"] {
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  cursor: ns-resize;
+}
+
+.resize-handle[data-dir="e"] {
+  right: -6px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: ew-resize;
+}
+
+.resize-handle[data-dir="w"] {
+  left: -6px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: ew-resize;
+}
+
+.resize-handle[data-dir="ne"] {
+  right: -6px;
+  top: -6px;
+  cursor: nesw-resize;
+}
+
+.resize-handle[data-dir="nw"] {
+  left: -6px;
+  top: -6px;
+  cursor: nwse-resize;
+}
+
+.resize-handle[data-dir="se"] {
+  right: -6px;
+  bottom: -6px;
+  cursor: nwse-resize;
+}
+
+.resize-handle[data-dir="sw"] {
+  left: -6px;
+  bottom: -6px;
+  cursor: nesw-resize;
+}
+
 .node.selected {
   border-color: var(--accent);
   box-shadow: 0 18px 30px rgba(240, 90, 40, 0.3);
+}
+
+.node.locked {
+  cursor: not-allowed;
+  opacity: 0.92;
+}
+
+.node.locked .resize-handle {
+  display: none;
 }
 
 .node.pulse {
