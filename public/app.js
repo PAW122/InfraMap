@@ -14,6 +14,8 @@ const zoomLevel = document.getElementById("zoom-level");
 const centerViewBtn = document.getElementById("center-view");
 const dirtyIndicator = document.getElementById("dirty-indicator");
 const linkBtn = document.getElementById("link-btn");
+const undoBtn = document.getElementById("undo-btn");
+const redoBtn = document.getElementById("redo-btn");
 
 const gridSize = 32;
 const zoomLimits = { min: 0.35, max: 2.5 };
@@ -36,6 +38,14 @@ const state = {
   dirty: false,
   linkMode: false,
   linkStartId: null,
+  history: {
+    undo: [],
+    redo: [],
+    saved: "",
+    last: "",
+    restoring: false,
+    max: 80,
+  },
 };
 
 function createEmptyBoard() {
@@ -99,6 +109,104 @@ function setDirty(isDirty) {
     dirtyIndicator.textContent = "";
     dirtyIndicator.classList.add("is-hidden");
   }
+}
+
+let historyTimer = null;
+
+function serializeBoard(board) {
+  return JSON.stringify(board);
+}
+
+function initHistory(board) {
+  if (historyTimer) {
+    clearTimeout(historyTimer);
+    historyTimer = null;
+  }
+  const snap = serializeBoard(board);
+  state.history.undo = [snap];
+  state.history.redo = [];
+  state.history.saved = snap;
+  state.history.last = snap;
+  updateHistoryButtons();
+  setDirty(false);
+}
+
+function recordHistory() {
+  if (state.history.restoring) return;
+  const snap = serializeBoard(state.board);
+  if (snap === state.history.last) {
+    refreshDirtyState(snap);
+    return;
+  }
+  state.history.undo.push(snap);
+  state.history.last = snap;
+  state.history.redo = [];
+  if (state.history.undo.length > state.history.max) {
+    state.history.undo.shift();
+  }
+  updateHistoryButtons();
+  refreshDirtyState(snap);
+}
+
+function scheduleHistory(delay = 300) {
+  if (historyTimer) {
+    clearTimeout(historyTimer);
+  }
+  historyTimer = setTimeout(() => {
+    historyTimer = null;
+    recordHistory();
+  }, delay);
+}
+
+function refreshDirtyState(snapshot) {
+  const current = snapshot || serializeBoard(state.board);
+  setDirty(current !== state.history.saved);
+}
+
+function markSaved() {
+  const snap = serializeBoard(state.board);
+  state.history.saved = snap;
+  state.history.last = snap;
+  if (!state.history.undo.length) {
+    state.history.undo = [snap];
+  }
+  refreshDirtyState(snap);
+  updateHistoryButtons();
+}
+
+function applySnapshot(snapshot) {
+  if (historyTimer) {
+    clearTimeout(historyTimer);
+    historyTimer = null;
+  }
+  state.history.restoring = true;
+  const data = JSON.parse(snapshot);
+  state.board = normalizeBoard(data);
+  state.history.last = snapshot;
+  renderAll();
+  state.history.restoring = false;
+  refreshDirtyState(snapshot);
+  updateHistoryButtons();
+}
+
+function undo() {
+  if (state.history.undo.length <= 1) return;
+  const current = state.history.undo.pop();
+  state.history.redo.push(current);
+  const prev = state.history.undo[state.history.undo.length - 1];
+  applySnapshot(prev);
+}
+
+function redo() {
+  if (!state.history.redo.length) return;
+  const next = state.history.redo.pop();
+  state.history.undo.push(next);
+  applySnapshot(next);
+}
+
+function updateHistoryButtons() {
+  if (undoBtn) undoBtn.disabled = state.history.undo.length <= 1;
+  if (redoBtn) redoBtn.disabled = state.history.redo.length === 0;
 }
 
 function setLinkMode(enabled) {
@@ -461,7 +569,7 @@ function stopDrag() {
   updateLinksPositions();
   updatePropsForm();
   if (moved) {
-    setDirty(true);
+    recordHistory();
   }
 }
 
@@ -490,7 +598,7 @@ function addNode(type) {
   state.board.nodes.push(node);
   renderAll();
   selectNode(id);
-  setDirty(true);
+  recordHistory();
 }
 
 function deleteSelected() {
@@ -502,7 +610,7 @@ function deleteSelected() {
   );
   state.selectedId = null;
   renderAll();
-  setDirty(true);
+  recordHistory();
 }
 
 async function loadBoard() {
@@ -514,12 +622,12 @@ async function loadBoard() {
     state.board = normalizeBoard(data);
     setStatus("Board loaded.", "success");
     renderAll();
-    setDirty(false);
+    initHistory(state.board);
   } catch (err) {
     setStatus("Could not load board. Using blank canvas.", "warn");
     state.board = createEmptyBoard();
     renderAll();
-    setDirty(false);
+    initHistory(state.board);
   }
 }
 
@@ -535,7 +643,8 @@ async function saveBoard() {
     });
     if (!res.ok) throw new Error("failed");
     setStatus("Saved to data/board.json.", "success");
-    setDirty(false);
+    recordHistory();
+    markSaved();
   } catch (err) {
     setStatus("Save failed. Check server logs.", "error");
   }
@@ -579,7 +688,7 @@ function stopPan() {
   if (!didMove) {
     selectNode(null);
   } else {
-    setDirty(true);
+    recordHistory();
   }
 }
 
@@ -588,7 +697,8 @@ function onWheel(event) {
   const viewport = getViewport();
   const zoomFactor = Math.exp(-event.deltaY * 0.001);
   setZoom(viewport.zoom * zoomFactor, event.clientX, event.clientY);
-  setDirty(true);
+  refreshDirtyState();
+  scheduleHistory();
 }
 
 let resizeState = null;
@@ -690,7 +800,7 @@ function stopResize() {
   updateLinksPositions();
   updatePropsForm();
   if (moved) {
-    setDirty(true);
+    recordHistory();
   }
 }
 
@@ -720,7 +830,7 @@ propsForm.addEventListener("input", (event) => {
     }
     renderAll();
     selectNode(node.id);
-    setDirty(true);
+    recordHistory();
     return;
   }
   updateNodeElement(node);
@@ -728,7 +838,8 @@ propsForm.addEventListener("input", (event) => {
     assignNodesToNetworks();
     updatePropsForm();
   }
-  setDirty(true);
+  refreshDirtyState();
+  scheduleHistory();
 });
 
 propsForm.addEventListener("submit", (event) => {
@@ -957,7 +1068,7 @@ function handleLinkClick(id) {
   if (linkIndex >= 0) {
     state.board.links.splice(linkIndex, 1);
     setStatus("Link removed.", "info");
-    setDirty(true);
+    recordHistory();
     renderAll();
   } else {
     state.board.links.push({
@@ -965,7 +1076,7 @@ function handleLinkClick(id) {
       from,
       to,
     });
-    setDirty(true);
+    recordHistory();
     renderAll();
   }
   state.linkStartId = null;
@@ -1008,21 +1119,21 @@ lockBtn.addEventListener("click", () => {
   node.locked = !node.locked;
   updateNodeElement(node);
   updatePropsForm();
-  setDirty(true);
+  recordHistory();
 });
 layerUpBtn.addEventListener("click", () => {
   const node = getSelectedNode();
   if (!node) return;
   node.z = (typeof node.z === "number" ? node.z : 0) + 1;
   updateNodeElement(node);
-  setDirty(true);
+  recordHistory();
 });
 layerDownBtn.addEventListener("click", () => {
   const node = getSelectedNode();
   if (!node) return;
   node.z = (typeof node.z === "number" ? node.z : 0) - 1;
   updateNodeElement(node);
-  setDirty(true);
+  recordHistory();
 });
 linkBtn.addEventListener("click", () => {
   setLinkMode(!state.linkMode);
@@ -1031,17 +1142,23 @@ linkBtn.addEventListener("click", () => {
     "info"
   );
 });
+undoBtn.addEventListener("click", () => {
+  undo();
+});
+redoBtn.addEventListener("click", () => {
+  redo();
+});
 saveBtn.addEventListener("click", () => saveBoard());
 reloadBtn.addEventListener("click", () => loadBoard());
 zoomOutBtn.addEventListener("click", () => {
   const viewport = getViewport();
   setZoom(viewport.zoom * 0.9);
-  setDirty(true);
+  recordHistory();
 });
 zoomInBtn.addEventListener("click", () => {
   const viewport = getViewport();
   setZoom(viewport.zoom * 1.1);
-  setDirty(true);
+  recordHistory();
 });
 centerViewBtn.addEventListener("click", () => {
   const viewport = getViewport();
@@ -1049,7 +1166,7 @@ centerViewBtn.addEventListener("click", () => {
   viewport.y = 0;
   viewport.zoom = 1;
   updateViewport();
-  setDirty(true);
+  recordHistory();
 });
 
 loadBoard();
