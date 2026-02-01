@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"inframap/internal/model"
+	"inframap/internal/sshutil"
 )
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -130,6 +131,8 @@ func (s *Server) handleDeviceSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "secrets store not available", http.StatusInternalServerError)
 		return
 	}
+	detect := r.URL.Query().Get("detect") == "1"
+	forceDetect := r.URL.Query().Get("force") == "1"
 
 	switch r.Method {
 	case http.MethodGet:
@@ -144,6 +147,29 @@ func (s *Server) handleDeviceSettings(w http.ResponseWriter, r *http.Request) {
 				"settings": model.DeviceSettings{},
 			})
 			return
+		}
+		if detect && settings.ConnectEnabled {
+			if settings.OS == "linux" {
+				if settings.LinkSpeedMbps == 0 || forceDetect {
+					if s.logs != nil {
+						s.logs.Add("info", "ssh", fmt.Sprintf("auto-detect link speed for %s", id))
+					}
+					speed, iface, detErr := sshutil.DetectLinkSpeed(settings, 8*time.Second)
+					if detErr != nil {
+						if s.logs != nil {
+							s.logs.Add("warn", "ssh", fmt.Sprintf("ethtool failed for %s: %v", id, detErr))
+						}
+					} else if speed > 0 {
+						settings.LinkSpeedMbps = speed
+						if s.logs != nil {
+							s.logs.Add("info", "ssh", fmt.Sprintf("link speed %d Mbps detected for %s (%s)", speed, id, iface))
+						}
+						_ = s.secrets.Set(id, settings)
+					}
+				}
+			} else if s.logs != nil {
+				s.logs.Add("info", "ssh", fmt.Sprintf("link speed detection skipped for %s (os=%s)", id, settings.OS))
+			}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"exists":   true,
@@ -165,6 +191,24 @@ func (s *Server) handleDeviceSettings(w http.ResponseWriter, r *http.Request) {
 			s.logs.Add("warn", "settings", fmt.Sprintf("failed to read previous settings for %s: %v", id, prevErr))
 		}
 		settings = sanitizeDeviceSettings(settings)
+		if s.logs != nil {
+			s.logs.Add("info", "settings", fmt.Sprintf("settings received for %s (connect=%t os=%s host=%s)", id, settings.ConnectEnabled, settings.OS, settings.Host))
+		}
+		if settings.ConnectEnabled && settings.OS == "linux" {
+			speed, iface, err := sshutil.DetectLinkSpeed(settings, 8*time.Second)
+			if err != nil {
+				if s.logs != nil {
+					s.logs.Add("warn", "ssh", fmt.Sprintf("ethtool failed for %s: %v", id, err))
+				}
+			} else if speed > 0 {
+				settings.LinkSpeedMbps = speed
+				if s.logs != nil {
+					s.logs.Add("info", "ssh", fmt.Sprintf("link speed %d Mbps detected for %s (%s)", speed, id, iface))
+				}
+			}
+		} else if settings.ConnectEnabled && s.logs != nil {
+			s.logs.Add("info", "ssh", fmt.Sprintf("link speed detection skipped for %s (os=%s)", id, settings.OS))
+		}
 		if err := s.secrets.Set(id, settings); err != nil {
 			http.Error(w, "failed to save device settings", http.StatusInternalServerError)
 			return
@@ -197,8 +241,9 @@ func (s *Server) handleDeviceSettings(w http.ResponseWriter, r *http.Request) {
 				s.logs.Add("info", "ssh", fmt.Sprintf("SSH settings saved for %s (host=%s port=%d user=%s)", id, host, port, user))
 			}
 		}
-		writeJSON(w, http.StatusOK, map[string]string{
-			"status": "saved",
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":   "saved",
+			"settings": settings,
 		})
 	case http.MethodDelete:
 		if err := s.secrets.Delete(id); err != nil {
@@ -225,6 +270,9 @@ func sanitizeDeviceSettings(settings model.DeviceSettings) model.DeviceSettings 
 	settings.AuthMethod = strings.ToLower(strings.TrimSpace(settings.AuthMethod))
 	if settings.AuthMethod == "" {
 		settings.AuthMethod = "password"
+	}
+	if settings.LinkSpeedMbps < 0 {
+		settings.LinkSpeedMbps = 0
 	}
 	if settings.AuthMethod == "password" {
 		settings.PrivateKey = ""

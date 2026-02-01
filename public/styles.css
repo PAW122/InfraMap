@@ -241,6 +241,21 @@ code {
   stroke-linecap: round;
 }
 
+.link-label {
+  fill: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.link-label.is-hidden {
+  display: none;
+}
+
 .world {
   position: absolute;
   inset: 0;

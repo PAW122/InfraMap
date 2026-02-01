@@ -108,6 +108,7 @@ function normalizeNode(node) {
   return {
     ...node,
     connectEnabled: node.connectEnabled === true,
+    linkSpeedMbps: typeof node.linkSpeedMbps === "number" ? node.linkSpeedMbps : 0,
   };
 }
 

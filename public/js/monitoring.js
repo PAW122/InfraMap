@@ -61,9 +61,10 @@ function setHelpForOS(os) {
   });
 }
 
-async function fetchDeviceSettings(id) {
+async function fetchDeviceSettings(id, detect = false) {
   try {
-    const res = await fetch(`/api/device-settings/${id}`);
+    const suffix = detect ? "?detect=1" : "";
+    const res = await fetch(`/api/device-settings/${id}${suffix}`);
     if (!res.ok) return { exists: false, settings: {} };
     return await res.json();
   } catch (err) {
@@ -80,6 +81,7 @@ async function saveDeviceSettings(id, settings) {
   if (!res.ok) {
     throw new Error("failed");
   }
+  return res.json();
 }
 
 async function hydrateDeviceSettings(nodes) {
@@ -87,7 +89,7 @@ async function hydrateDeviceSettings(nodes) {
   const targets = nodes.filter((node) => node.type !== "network");
   if (!targets.length) return;
   const results = await Promise.all(
-    targets.map((node) => fetchDeviceSettings(node.id))
+    targets.map((node) => fetchDeviceSettings(node.id, true))
   );
   let changed = false;
   results.forEach((res, index) => {
@@ -98,10 +100,17 @@ async function hydrateDeviceSettings(nodes) {
       targets[index].connectEnabled = desired;
       changed = true;
     }
+    if (typeof remote.linkSpeedMbps === "number" && remote.linkSpeedMbps >= 0) {
+      if (targets[index].linkSpeedMbps !== remote.linkSpeedMbps) {
+        targets[index].linkSpeedMbps = remote.linkSpeedMbps;
+        changed = true;
+      }
+    }
   });
   if (changed) {
     targets.forEach((node) => updateNodeElement(node));
     updateStatusBadges();
+    updateLinksPositions();
     syncMonitoringSettings();
   }
 }
@@ -126,6 +135,10 @@ async function openSettingsModal() {
   settingsForm.elements.os.value = remoteSettings.os || "linux";
   settingsForm.elements.host.value = remoteSettings.host || node.ipPublic || node.ipPrivate || "";
   settingsForm.elements.port.value = remoteSettings.port || "";
+  settingsForm.elements.linkSpeedMbps.value =
+    typeof remoteSettings.linkSpeedMbps === "number" && remoteSettings.linkSpeedMbps > 0
+      ? remoteSettings.linkSpeedMbps
+      : node.linkSpeedMbps || "";
   settingsForm.elements.authMethod.value = remoteSettings.authMethod || "password";
   settingsForm.elements.username.value = remoteSettings.username || "";
   settingsForm.elements.password.value = remoteSettings.password || "";
@@ -201,8 +214,10 @@ async function applySettingsFromForm() {
   node.pingIntervalSec = settings.intervalSec;
   node.pingShowStatus = settings.showStatus;
   node.connectEnabled = settingsForm.elements.connectEnabled.checked;
+  node.linkSpeedMbps = parseInt(settingsForm.elements.linkSpeedMbps.value, 10) || 0;
   updateNodeElement(node);
   updateStatusBadges();
+  updateLinksPositions();
   recordHistory();
   syncMonitoringSettings();
   const deviceSettings = {
@@ -210,6 +225,7 @@ async function applySettingsFromForm() {
     host: settingsForm.elements.host.value,
     port: parseInt(settingsForm.elements.port.value, 10) || 0,
     connectEnabled: settingsForm.elements.connectEnabled.checked,
+    linkSpeedMbps: parseInt(settingsForm.elements.linkSpeedMbps.value, 10) || 0,
     authMethod: settingsForm.elements.authMethod.value,
     username: settingsForm.elements.username.value,
     password: settingsForm.elements.password.value,
@@ -217,7 +233,18 @@ async function applySettingsFromForm() {
     privateKeyPassphrase: settingsForm.elements.privateKeyPassphrase.value,
   };
   try {
-    await saveDeviceSettings(node.id, deviceSettings);
+    const saved = await saveDeviceSettings(node.id, deviceSettings);
+    if (saved && saved.settings) {
+      if (typeof saved.settings.linkSpeedMbps === "number") {
+        node.linkSpeedMbps = saved.settings.linkSpeedMbps;
+      }
+      if (typeof saved.settings.connectEnabled === "boolean") {
+        node.connectEnabled = saved.settings.connectEnabled;
+      }
+      updateNodeElement(node);
+      updateStatusBadges();
+      updateLinksPositions();
+    }
     setStatus("Device settings saved.", "success");
   } catch (err) {
     setStatus("Failed to save device settings.", "warn");

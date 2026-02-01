@@ -45,6 +45,7 @@ type DeviceSettings struct {
 	PrivateKey           string `json:"privateKey"`
 	PrivateKeyPassphrase string `json:"privateKeyPassphrase"`
 	ConnectEnabled       bool   `json:"connectEnabled"`
+	LinkSpeedMbps        int    `json:"linkSpeedMbps"`
 }
 
 type LogEntry struct {

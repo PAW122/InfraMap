@@ -383,6 +383,7 @@ function addNode(type) {
     ipPublic: "",
     notes: "",
     connectEnabled: false,
+    linkSpeedMbps: 0,
   };
   if (type === "network") {
     node.label = `LAN-${state.board.nodes.filter((n) => n.type === "network").length + 1}`;
@@ -718,6 +719,12 @@ function renderLinks() {
     line.setAttribute("x2", b.x);
     line.setAttribute("y2", b.y);
     linksLayer.appendChild(line);
+    const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    label.classList.add("link-label");
+    label.dataset.from = link.from;
+    label.dataset.to = link.to;
+    updateLinkLabel(label, from, to, a, b);
+    linksLayer.appendChild(label);
   });
 }
 
@@ -735,7 +742,59 @@ function updateLinksPositions() {
     line.setAttribute("x2", b.x);
     line.setAttribute("y2", b.y);
   });
+  linksLayer.querySelectorAll(".link-label").forEach((label) => {
+    const from = nodesById.get(label.dataset.from);
+    const to = nodesById.get(label.dataset.to);
+    if (!from || !to) return;
+    const a = getNodeCenter(from);
+    const b = getNodeCenter(to);
+    updateLinkLabel(label, from, to, a, b);
+  });
   updateLinksLayerBounds();
+}
+
+function updateLinkLabel(labelEl, from, to, a, b) {
+  const text = getLinkSpeedLabel(from, to);
+  if (!text) {
+    labelEl.textContent = "";
+    labelEl.classList.add("is-hidden");
+    return;
+  }
+  labelEl.textContent = text;
+  labelEl.classList.remove("is-hidden");
+  const midX = (a.x + b.x) / 2;
+  const midY = (a.y + b.y) / 2;
+  labelEl.setAttribute("x", midX);
+  labelEl.setAttribute("y", midY - 6);
+}
+
+function getLinkSpeedLabel(from, to) {
+  const speedA = getNodeLinkSpeed(from);
+  const speedB = getNodeLinkSpeed(to);
+  let speed = 0;
+  if (speedA > 0 && speedB > 0) {
+    speed = Math.min(speedA, speedB);
+  } else {
+    speed = speedA || speedB || 0;
+  }
+  if (!speed) return "";
+  return formatSpeed(speed);
+}
+
+function getNodeLinkSpeed(node) {
+  if (!node || node.type === "network") return 0;
+  if (node.connectEnabled !== true) return 0;
+  const value = typeof node.linkSpeedMbps === "number" ? node.linkSpeedMbps : 0;
+  return value > 0 ? value : 0;
+}
+
+function formatSpeed(speedMbps) {
+  if (speedMbps >= 1000) {
+    const gbps = speedMbps / 1000;
+    const rounded = Number.isInteger(gbps) ? gbps.toFixed(0) : gbps.toFixed(1);
+    return `${rounded} Gbps`;
+  }
+  return `${speedMbps} Mbps`;
 }
 
 function updateLinksLayerBounds() {
