@@ -16,11 +16,17 @@ const dirtyIndicator = document.getElementById("dirty-indicator");
 const linkBtn = document.getElementById("link-btn");
 const undoBtn = document.getElementById("undo-btn");
 const redoBtn = document.getElementById("redo-btn");
+const settingsBtn = document.getElementById("settings-btn");
+const settingsModal = document.getElementById("settings-modal");
+const settingsClose = document.getElementById("settings-close");
+const settingsApply = document.getElementById("settings-apply");
+const settingsForm = document.getElementById("settings-form");
 
 const gridSize = 32;
 const zoomLimits = { min: 0.35, max: 2.5 };
 const networkDefaults = { width: 420, height: 260, color: "#1d6fa3" };
 const networkMinSize = { width: 200, height: 140 };
+const monitoringDefaults = { intervalSec: 30, showStatus: true };
 
 const typeLabels = {
   server: "SV",
@@ -46,6 +52,8 @@ const state = {
     restoring: false,
     max: 80,
   },
+  statusById: {},
+  statusTimer: null,
 };
 
 function createEmptyBoard() {
@@ -54,6 +62,7 @@ function createEmptyBoard() {
     meta: {
       name: "InfraMap",
       updatedAt: new Date().toISOString(),
+      monitoring: { ...monitoringDefaults },
     },
     viewport: { x: 0, y: 0, zoom: 1 },
     nodes: [],
@@ -184,6 +193,7 @@ function applySnapshot(snapshot) {
   state.board = normalizeBoard(data);
   state.history.last = snapshot;
   renderAll();
+  syncMonitoringSettings();
   state.history.restoring = false;
   refreshDirtyState(snapshot);
   updateHistoryButtons();
@@ -207,6 +217,200 @@ function redo() {
 function updateHistoryButtons() {
   if (undoBtn) undoBtn.disabled = state.history.undo.length <= 1;
   if (redoBtn) redoBtn.disabled = state.history.redo.length === 0;
+}
+
+function hasAnyPingEnabledNode() {
+  return state.board.nodes.some((node) => node.type !== "network" && node.pingEnabled === true);
+}
+
+function hasAnyVisibleStatus() {
+  return state.board.nodes.some(
+    (node) =>
+      node.type !== "network" &&
+      node.pingEnabled === true &&
+      node.pingShowStatus !== false
+  );
+}
+
+function sanitizeMonitoringSettings(settings) {
+  const interval = Math.max(5, Math.min(3600, parseInt(settings.intervalSec, 10) || 0));
+  return {
+    intervalSec: interval || monitoringDefaults.intervalSec,
+    showStatus: Boolean(settings.showStatus),
+  };
+}
+
+function canEnablePing(node) {
+  return Boolean(node.ipPrivate || node.ipPublic);
+}
+
+function getNodeMonitoring(node) {
+  return sanitizeMonitoringSettings({
+    intervalSec:
+      typeof node.pingIntervalSec === "number"
+        ? node.pingIntervalSec
+        : monitoringDefaults.intervalSec,
+    showStatus: node.pingShowStatus !== false,
+  });
+}
+
+function syncSettingsFormState(enabled) {
+  if (!settingsForm) return;
+  settingsForm.elements.pingInterval.disabled = !enabled;
+  settingsForm.elements.showStatus.disabled = !enabled;
+}
+
+function openSettingsModal() {
+  if (!settingsModal || !settingsForm) return;
+  const node = getSelectedNode();
+  if (!node || node.type === "network") {
+    setStatus("Select a device to edit settings.", "warn");
+    return;
+  }
+  const settings = getNodeMonitoring(node);
+  const hasIP = canEnablePing(node);
+  settingsForm.elements.pingEnabled.checked = hasIP && node.pingEnabled === true;
+  settingsForm.elements.pingEnabled.disabled = !hasIP;
+  settingsForm.elements.pingInterval.value = settings.intervalSec;
+  settingsForm.elements.showStatus.checked = settings.showStatus;
+  syncSettingsFormState(settingsForm.elements.pingEnabled.checked);
+  const title = document.getElementById("settings-title");
+  if (title) {
+    title.textContent = `Settings · ${node.label || node.id}`;
+  }
+  settingsModal.classList.remove("is-hidden");
+}
+
+function closeSettingsModal() {
+  if (!settingsModal) return;
+  settingsModal.classList.add("is-hidden");
+}
+
+function applySettingsFromForm() {
+  if (!settingsForm) return;
+  const node = getSelectedNode();
+  if (!node || node.type === "network") return;
+  const settings = sanitizeMonitoringSettings({
+    intervalSec: settingsForm.elements.pingInterval.value,
+    showStatus: settingsForm.elements.showStatus.checked,
+  });
+  const hasIP = canEnablePing(node);
+  node.pingEnabled = hasIP && settingsForm.elements.pingEnabled.checked;
+  node.pingIntervalSec = settings.intervalSec;
+  node.pingShowStatus = settings.showStatus;
+  updateNodeElement(node);
+  updateStatusBadges();
+  recordHistory();
+  syncMonitoringSettings();
+  closeSettingsModal();
+}
+
+function syncMonitoringSettings() {
+  startStatusPolling();
+  canvas.classList.toggle("show-status", hasAnyVisibleStatus());
+  postMonitoringNodes();
+}
+
+async function postMonitoringNodes() {
+  try {
+    const payload = {
+      nodes: state.board.nodes.map((node) => ({
+        id: node.id,
+        type: node.type,
+        ipPrivate: node.ipPrivate || "",
+        ipPublic: node.ipPublic || "",
+        pingEnabled: node.pingEnabled === true,
+        pingIntervalSec: node.pingIntervalSec || monitoringDefaults.intervalSec,
+      })),
+    };
+    await fetch("/api/monitoring/nodes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    setStatus("Failed to update monitoring nodes.", "warn");
+  }
+}
+
+function startStatusPolling() {
+  if (state.statusTimer) {
+    clearInterval(state.statusTimer);
+    state.statusTimer = null;
+  }
+  const interval = getStatusPollInterval();
+  if (!interval) {
+    state.statusById = {};
+    updateStatusBadges();
+    return;
+  }
+  fetchStatus();
+  state.statusTimer = setInterval(fetchStatus, interval * 1000);
+}
+
+function getStatusPollInterval() {
+  const intervals = state.board.nodes
+    .filter((node) => node.type !== "network" && node.pingEnabled === true)
+    .map((node) => {
+      const value = typeof node.pingIntervalSec === "number" ? node.pingIntervalSec : 0;
+      return Math.max(5, Math.min(3600, value || monitoringDefaults.intervalSec));
+    });
+  if (!intervals.length) return 0;
+  return Math.min(...intervals);
+}
+
+async function fetchStatus() {
+  try {
+    const res = await fetch("/api/status");
+    if (!res.ok) return;
+    const data = await res.json();
+    state.statusById = data.results || {};
+    updateStatusBadges();
+  } catch (err) {
+    setStatus("Failed to fetch status.", "warn");
+  }
+}
+
+function updateStatusBadges() {
+  const nodes = world.querySelectorAll(".node");
+  nodes.forEach((nodeEl) => {
+    const node = getNodeById(nodeEl.dataset.id);
+    if (!node || node.type === "network") return;
+    applyStatusToNode(node, nodeEl);
+  });
+}
+
+function applyStatusToNode(node, nodeEl) {
+  let stateLabel = "unknown";
+  let title = "Unknown";
+  if (node.pingEnabled !== true || node.pingShowStatus === false) {
+    stateLabel = "disabled";
+    title = node.pingEnabled !== true ? "Monitoring disabled" : "Status hidden";
+    nodeEl.dataset.status = stateLabel;
+    const dot = nodeEl.querySelector(".node__status");
+    if (dot) {
+      dot.title = title;
+    }
+    return;
+  }
+  const status = state.statusById[node.id];
+  if (status) {
+    if (status.error === "no ip") {
+      stateLabel = "unknown";
+      title = "No IP assigned";
+    } else {
+      stateLabel = status.online ? "online" : "offline";
+      title = status.online ? "Online" : "Offline";
+    }
+    if (status.lastChecked) {
+      title += ` (checked ${status.lastChecked})`;
+    }
+  }
+  nodeEl.dataset.status = stateLabel;
+  const dot = nodeEl.querySelector(".node__status");
+  if (dot) {
+    dot.title = title;
+  }
 }
 
 function setLinkMode(enabled) {
@@ -316,6 +520,7 @@ function renderAll() {
   assignNodesToNetworks();
   applySelection();
   updateLinkModeHighlight();
+  updateStatusBadges();
   updatePropsForm();
   updateViewport();
 }
@@ -370,6 +575,9 @@ function buildNodeElement(node) {
     meta.appendChild(ip);
     el.appendChild(icon);
     el.appendChild(meta);
+    const statusDot = document.createElement("div");
+    statusDot.className = "node__status";
+    el.appendChild(statusDot);
   }
 
   el.addEventListener("mousedown", (event) => {
@@ -464,6 +672,7 @@ function updatePropsForm() {
     if (lockBtn) lockBtn.disabled = true;
     if (layerUpBtn) layerUpBtn.disabled = true;
     if (layerDownBtn) layerDownBtn.disabled = true;
+    if (settingsBtn) settingsBtn.disabled = true;
     if (lockBtn) {
       lockBtn.classList.remove("btn--primary");
       lockBtn.classList.add("btn--ghost");
@@ -476,6 +685,7 @@ function updatePropsForm() {
   if (lockBtn) lockBtn.disabled = false;
   if (layerUpBtn) layerUpBtn.disabled = false;
   if (layerDownBtn) layerDownBtn.disabled = false;
+  if (settingsBtn) settingsBtn.disabled = node.type === "network";
   propsForm.dataset.mode = node.type === "network" ? "network" : "node";
   propsForm.elements.label.value = node.label || "";
   propsForm.elements.type.value = node.type || "server";
@@ -622,11 +832,13 @@ async function loadBoard() {
     state.board = normalizeBoard(data);
     setStatus("Board loaded.", "success");
     renderAll();
+    syncMonitoringSettings();
     initHistory(state.board);
   } catch (err) {
     setStatus("Could not load board. Using blank canvas.", "warn");
     state.board = createEmptyBoard();
     renderAll();
+    syncMonitoringSettings();
     initHistory(state.board);
   }
 }
@@ -809,6 +1021,7 @@ propsForm.addEventListener("input", (event) => {
   if (!node) return;
   const field = event.target.name;
   if (!field) return;
+  const isCheckbox = event.target.type === "checkbox";
   if (field === "width" || field === "height") {
     const value = parseFloat(event.target.value);
     node[field] = Number.isFinite(value) ? value : 0;
@@ -818,6 +1031,8 @@ propsForm.addEventListener("input", (event) => {
     if (field === "height") {
       node.height = Math.max(networkMinSize.height, node.height);
     }
+  } else if (isCheckbox) {
+    node[field] = event.target.checked;
   } else {
     node[field] = event.target.value;
   }
@@ -837,6 +1052,16 @@ propsForm.addEventListener("input", (event) => {
   if (node.type === "network" || field === "label") {
     assignNodesToNetworks();
     updatePropsForm();
+  }
+  if (field === "ipPrivate" || field === "ipPublic") {
+    const hasIP = Boolean(node.ipPrivate || node.ipPublic);
+    if (!hasIP && node.pingEnabled) {
+      node.pingEnabled = false;
+      node.pingShowStatus = node.pingShowStatus !== false;
+    }
+    postMonitoringNodes();
+    syncMonitoringSettings();
+    updateStatusBadges();
   }
   refreshDirtyState();
   scheduleHistory();
@@ -874,6 +1099,16 @@ function updateNodeElement(node) {
   if (icon) icon.textContent = typeLabels[node.type] || "SV";
   if (label) label.textContent = node.label || "Untitled";
   if (ip) ip.textContent = buildIpLine(node);
+  if (node.type !== "network") {
+    applyStatusToNode(node, nodeEl);
+  } else {
+    nodeEl.dataset.status = "";
+  }
+  if (node.pingShowStatus === false) {
+    nodeEl.classList.add("status-hidden");
+  } else {
+    nodeEl.classList.remove("status-hidden");
+  }
 }
 
 function createLinksLayer() {
@@ -1111,6 +1346,36 @@ document.querySelectorAll("[data-add]").forEach((btn) => {
     addNode(btn.dataset.add);
   });
 });
+
+if (settingsBtn) {
+  settingsBtn.addEventListener("click", () => {
+    openSettingsModal();
+  });
+}
+if (settingsClose) {
+  settingsClose.addEventListener("click", () => {
+    closeSettingsModal();
+  });
+}
+if (settingsModal) {
+  settingsModal.addEventListener("click", (event) => {
+    if (event.target && event.target.dataset && event.target.dataset.close === "settings") {
+      closeSettingsModal();
+    }
+  });
+}
+if (settingsApply) {
+  settingsApply.addEventListener("click", () => {
+    applySettingsFromForm();
+  });
+}
+if (settingsForm) {
+  settingsForm.addEventListener("input", (event) => {
+    if (event.target.name === "pingEnabled") {
+      syncSettingsFormState(event.target.checked);
+    }
+  });
+}
 
 deleteBtn.addEventListener("click", () => deleteSelected());
 lockBtn.addEventListener("click", () => {

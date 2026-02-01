@@ -316,6 +316,12 @@ code {
   gap: 12px;
 }
 
+.panel__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .panel h2 {
   margin: 0;
 }
@@ -399,6 +405,42 @@ code {
   gap: 10px;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
   z-index: 2;
+}
+
+.node__status {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #c0c0c0;
+  box-shadow: 0 0 0 2px #fff;
+  display: none;
+}
+
+.canvas.show-status .node__status {
+  display: block;
+}
+
+.node[data-status="online"] .node__status {
+  background: var(--accent-3);
+}
+
+.node[data-status="offline"] .node__status {
+  background: var(--danger);
+}
+
+.node[data-status="unknown"] .node__status {
+  background: #c0c0c0;
+}
+
+.node[data-status="disabled"] .node__status {
+  display: none;
+}
+
+.node.status-hidden .node__status {
+  display: none;
 }
 
 .canvas .node:active {
@@ -602,6 +644,82 @@ code {
 
 .hint {
   line-height: 1.4;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.modal.is-hidden {
+  display: none;
+}
+
+.modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(28, 29, 33, 0.35);
+}
+
+.modal__panel {
+  position: relative;
+  background: #fff;
+  border-radius: 18px;
+  padding: 20px;
+  width: min(420px, 92vw);
+  box-shadow: 0 20px 50px rgba(28, 29, 33, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  z-index: 1;
+}
+
+.modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-form input[type="number"] {
+  border-radius: 12px;
+  border: 1px solid rgba(28, 29, 33, 0.15);
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.toggle input {
+  accent-color: var(--accent);
+}
+
+.modal__footer {
+  display: flex;
+  justify-content: flex-end;
 }
 
 @keyframes fadeIn {
