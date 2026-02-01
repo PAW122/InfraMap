@@ -686,6 +686,10 @@ code {
   z-index: 1;
 }
 
+.modal__panel--scroll {
+  max-height: 90vh;
+}
+
 .modal__panel--wide {
   width: min(720px, 92vw);
 }
@@ -701,6 +705,12 @@ code {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.modal__panel--scroll .settings-form {
+  overflow: auto;
+  max-height: calc(90vh - 140px);
+  padding-right: 6px;
 }
 
 .settings-form label {
