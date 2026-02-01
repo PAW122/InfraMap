@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>InfraMap</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand__logo">IM</div>
+          <div class="brand__text">
+            <div class="brand__title">InfraMap</div>
+            <div class="brand__subtitle">Infrastructure canvas</div>
+          </div>
+        </div>
+        <div class="toolbar">
+          <button class="btn btn--ghost" data-add="server">Add Server</button>
+          <button class="btn btn--ghost" data-add="pc">Add PC</button>
+          <button class="btn btn--ghost" data-add="router">Add Router</button>
+          <button class="btn btn--ghost" data-add="switch">Add Switch</button>
+          <button class="btn btn--ghost" data-add="cloud">Add Cloud</button>
+        </div>
+        <div class="toolbar toolbar--actions">
+          <button id="save-btn" class="btn btn--primary">Save JSON</button>
+          <button id="reload-btn" class="btn btn--ghost">Reload</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="canvas-wrap">
+          <div class="canvas-meta">
+            <div class="chip">Drag nodes to position</div>
+            <div class="chip chip--quiet">Double-click node to focus</div>
+          </div>
+          <div id="canvas" class="canvas" tabindex="0" aria-label="Infrastructure canvas"></div>
+        </section>
+        <aside class="panel">
+          <div class="panel__header">
+            <h2>Properties</h2>
+            <div id="status" class="status">Ready.</div>
+          </div>
+          <form id="props-form" class="props">
+            <label>
+              Label
+              <input type="text" name="label" placeholder="Server A" />
+            </label>
+            <label>
+              Type
+              <select name="type">
+                <option value="server">Server</option>
+                <option value="pc">PC</option>
+                <option value="router">Router</option>
+                <option value="switch">Switch</option>
+                <option value="cloud">Cloud</option>
+              </select>
+            </label>
+            <label>
+              Network
+              <input type="text" name="network" placeholder="LAN-1 / WAN / Cloud" />
+            </label>
+            <label>
+              Private IP
+              <input type="text" name="ipPrivate" placeholder="10.0.0.10" />
+            </label>
+            <label>
+              Public IP
+              <input type="text" name="ipPublic" placeholder="203.0.113.10" />
+            </label>
+            <label>
+              Notes
+              <textarea name="notes" rows="4" placeholder="Role, OS, services"></textarea>
+            </label>
+            <div class="props__actions">
+              <button id="delete-btn" class="btn btn--danger" type="button">Delete Node</button>
+            </div>
+          </form>
+          <div class="panel__footer">
+            <div class="hint">Data is saved to <code>data/board.json</code>.</div>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
