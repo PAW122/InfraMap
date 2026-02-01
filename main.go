@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"inframap/internal/monitoring"
 	"inframap/internal/server"
