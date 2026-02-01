@@ -4,6 +4,8 @@ const statusEl = document.getElementById("status");
 const propsForm = document.getElementById("props-form");
 const deleteBtn = document.getElementById("delete-btn");
 const lockBtn = document.getElementById("lock-btn");
+const layerUpBtn = document.getElementById("layer-up");
+const layerDownBtn = document.getElementById("layer-down");
 const saveBtn = document.getElementById("save-btn");
 const reloadBtn = document.getElementById("reload-btn");
 const zoomOutBtn = document.getElementById("zoom-out");
@@ -11,6 +13,7 @@ const zoomInBtn = document.getElementById("zoom-in");
 const zoomLevel = document.getElementById("zoom-level");
 const centerViewBtn = document.getElementById("center-view");
 const dirtyIndicator = document.getElementById("dirty-indicator");
+const linkBtn = document.getElementById("link-btn");
 
 const gridSize = 32;
 const zoomLimits = { min: 0.35, max: 2.5 };
@@ -31,6 +34,8 @@ const state = {
   selectedId: null,
   dragging: null,
   dirty: false,
+  linkMode: false,
+  linkStartId: null,
 };
 
 function createEmptyBoard() {
@@ -94,6 +99,30 @@ function setDirty(isDirty) {
     dirtyIndicator.textContent = "";
     dirtyIndicator.classList.add("is-hidden");
   }
+}
+
+function setLinkMode(enabled) {
+  state.linkMode = enabled;
+  if (linkBtn) {
+    linkBtn.classList.toggle("btn--primary", enabled);
+    linkBtn.classList.toggle("btn--ghost", !enabled);
+  }
+  if (!enabled) {
+    state.linkStartId = null;
+  }
+  canvas.classList.toggle("link-mode", enabled);
+  updateLinkModeHighlight();
+}
+
+function updateLinkModeHighlight() {
+  const nodes = world.querySelectorAll(".node");
+  nodes.forEach((nodeEl) => {
+    if (nodeEl.dataset.id === state.linkStartId) {
+      nodeEl.classList.add("link-start");
+    } else {
+      nodeEl.classList.remove("link-start");
+    }
+  });
 }
 
 function clamp(value, min, max) {
@@ -161,16 +190,24 @@ function setZoom(zoom, clientX, clientY) {
   updateViewport();
 }
 
+let linksLayer = null;
+
 function renderAll() {
   world.innerHTML = "";
+  linksLayer = createLinksLayer();
+  world.appendChild(linksLayer);
+
   const networks = state.board.nodes.filter((node) => node.type === "network");
   const others = state.board.nodes.filter((node) => node.type !== "network");
   [...networks, ...others].forEach((node) => {
     const el = buildNodeElement(node);
     world.appendChild(el);
   });
+  renderLinks();
+  updateLinksLayerBounds();
   assignNodesToNetworks();
   applySelection();
+  updateLinkModeHighlight();
   updatePropsForm();
   updateViewport();
 }
@@ -182,6 +219,7 @@ function buildNodeElement(node) {
     el.classList.add("locked");
   }
   el.dataset.id = node.id;
+  el.style.zIndex = getNodeZIndex(node);
   el.style.left = `${node.x || 0}px`;
   el.style.top = `${node.y || 0}px`;
   if (node.type === "network") {
@@ -230,6 +268,10 @@ function buildNodeElement(node) {
     if (event.button !== 0) return;
     event.stopPropagation();
     selectNode(node.id);
+    if (state.linkMode) {
+      handleLinkClick(node.id);
+      return;
+    }
     if (node.locked) return;
     startDrag(event, node.id);
   });
@@ -312,6 +354,8 @@ function updatePropsForm() {
     });
     deleteBtn.disabled = true;
     if (lockBtn) lockBtn.disabled = true;
+    if (layerUpBtn) layerUpBtn.disabled = true;
+    if (layerDownBtn) layerDownBtn.disabled = true;
     if (lockBtn) {
       lockBtn.classList.remove("btn--primary");
       lockBtn.classList.add("btn--ghost");
@@ -322,6 +366,8 @@ function updatePropsForm() {
 
   inputs.forEach((el) => (el.disabled = false));
   if (lockBtn) lockBtn.disabled = false;
+  if (layerUpBtn) layerUpBtn.disabled = false;
+  if (layerDownBtn) layerDownBtn.disabled = false;
   propsForm.dataset.mode = node.type === "network" ? "network" : "node";
   propsForm.elements.label.value = node.label || "";
   propsForm.elements.type.value = node.type || "server";
@@ -367,6 +413,10 @@ function getSelectedNode() {
   return state.board.nodes.find((n) => n.id === state.selectedId) || null;
 }
 
+function getNodeById(id) {
+  return state.board.nodes.find((n) => n.id === id) || null;
+}
+
 function startDrag(event, id) {
   const node = state.board.nodes.find((n) => n.id === id);
   if (!node) return;
@@ -399,6 +449,7 @@ function onDrag(event) {
   }
   nodeEl.style.left = `${node.x}px`;
   nodeEl.style.top = `${node.y}px`;
+  updateLinksPositions();
 }
 
 function stopDrag() {
@@ -407,6 +458,7 @@ function stopDrag() {
   window.removeEventListener("mousemove", onDrag);
   window.removeEventListener("mouseup", stopDrag);
   assignNodesToNetworks();
+  updateLinksPositions();
   updatePropsForm();
   if (moved) {
     setDirty(true);
@@ -443,7 +495,11 @@ function addNode(type) {
 
 function deleteSelected() {
   if (!state.selectedId) return;
+  const removedId = state.selectedId;
   state.board.nodes = state.board.nodes.filter((n) => n.id !== state.selectedId);
+  state.board.links = state.board.links.filter(
+    (link) => link.from !== removedId && link.to !== removedId
+  );
   state.selectedId = null;
   renderAll();
   setDirty(true);
@@ -622,6 +678,7 @@ function onResizeMove(event) {
   node.width = width;
   node.height = height;
   updateNodeElement(node);
+  updateLinksPositions();
 }
 
 function stopResize() {
@@ -630,6 +687,7 @@ function stopResize() {
   window.removeEventListener("mousemove", onResizeMove);
   window.removeEventListener("mouseup", stopResize);
   assignNodesToNetworks();
+  updateLinksPositions();
   updatePropsForm();
   if (moved) {
     setDirty(true);
@@ -684,9 +742,11 @@ function updateNodeElement(node) {
   if (node.locked) {
     nodeEl.classList.add("locked");
   }
+  nodeEl.style.zIndex = getNodeZIndex(node);
   nodeEl.style.left = `${node.x || 0}px`;
   nodeEl.style.top = `${node.y || 0}px`;
   if (node.id === state.selectedId) nodeEl.classList.add("selected");
+  if (node.id === state.linkStartId) nodeEl.classList.add("link-start");
   const icon = nodeEl.querySelector(".node__icon");
   const label = nodeEl.querySelector(".node__label");
   const ip = nodeEl.querySelector(".node__ip");
@@ -703,6 +763,107 @@ function updateNodeElement(node) {
   if (icon) icon.textContent = typeLabels[node.type] || "SV";
   if (label) label.textContent = node.label || "Untitled";
   if (ip) ip.textContent = buildIpLine(node);
+}
+
+function createLinksLayer() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.classList.add("links-layer");
+  return svg;
+}
+
+function renderLinks() {
+  if (!linksLayer) return;
+  linksLayer.innerHTML = "";
+  const nodesById = new Map(state.board.nodes.map((node) => [node.id, node]));
+  state.board.links.forEach((link) => {
+    const from = nodesById.get(link.from);
+    const to = nodesById.get(link.to);
+    if (!from || !to) return;
+    const a = getNodeCenter(from);
+    const b = getNodeCenter(to);
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line.classList.add("link-line");
+    line.dataset.from = link.from;
+    line.dataset.to = link.to;
+    line.setAttribute("x1", a.x);
+    line.setAttribute("y1", a.y);
+    line.setAttribute("x2", b.x);
+    line.setAttribute("y2", b.y);
+    linksLayer.appendChild(line);
+  });
+}
+
+function updateLinksPositions() {
+  if (!linksLayer) return;
+  const nodesById = new Map(state.board.nodes.map((node) => [node.id, node]));
+  linksLayer.querySelectorAll("line").forEach((line) => {
+    const from = nodesById.get(line.dataset.from);
+    const to = nodesById.get(line.dataset.to);
+    if (!from || !to) return;
+    const a = getNodeCenter(from);
+    const b = getNodeCenter(to);
+    line.setAttribute("x1", a.x);
+    line.setAttribute("y1", a.y);
+    line.setAttribute("x2", b.x);
+    line.setAttribute("y2", b.y);
+  });
+  updateLinksLayerBounds();
+}
+
+function updateLinksLayerBounds() {
+  if (!linksLayer) return;
+  const nodes = state.board.nodes;
+  if (!nodes.length) {
+    linksLayer.setAttribute("width", 1);
+    linksLayer.setAttribute("height", 1);
+    linksLayer.setAttribute("viewBox", "0 0 1 1");
+    linksLayer.style.left = "0px";
+    linksLayer.style.top = "0px";
+    return;
+  }
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  nodes.forEach((node) => {
+    const bounds = getNodeBounds(node);
+    minX = Math.min(minX, bounds.x);
+    minY = Math.min(minY, bounds.y);
+    maxX = Math.max(maxX, bounds.x + bounds.width);
+    maxY = Math.max(maxY, bounds.y + bounds.height);
+  });
+  const padding = 400;
+  const left = minX - padding;
+  const top = minY - padding;
+  const width = Math.max(1, maxX - minX + padding * 2);
+  const height = Math.max(1, maxY - minY + padding * 2);
+  linksLayer.style.left = `${left}px`;
+  linksLayer.style.top = `${top}px`;
+  linksLayer.setAttribute("width", width);
+  linksLayer.setAttribute("height", height);
+  linksLayer.setAttribute("viewBox", `${left} ${top} ${width} ${height}`);
+}
+
+function getNodeBounds(node) {
+  const nodeEl = world.querySelector(`[data-id="${node.id}"]`);
+  let width = nodeEl ? nodeEl.offsetWidth : 150;
+  let height = nodeEl ? nodeEl.offsetHeight : 70;
+  if (node.type === "network") {
+    width = typeof node.width === "number" ? node.width : networkDefaults.width;
+    height = typeof node.height === "number" ? node.height : networkDefaults.height;
+  }
+  return {
+    x: typeof node.x === "number" ? node.x : 0,
+    y: typeof node.y === "number" ? node.y : 0,
+    width,
+    height,
+  };
+}
+
+function getNodeZIndex(node) {
+  const base = node.type === "network" ? 1 : 2;
+  const offset = typeof node.z === "number" ? node.z : 0;
+  return base + offset;
 }
 
 function assignNodesToNetworks() {
@@ -760,6 +921,57 @@ function getNodeCenter(node) {
   };
 }
 
+function handleLinkClick(id) {
+  if (!state.linkMode) return;
+  const clicked = getNodeById(id);
+  if (!clicked) return;
+  if (clicked.type === "network") {
+    setStatus("Linking networks is disabled.", "warn");
+    return;
+  }
+  if (!state.linkStartId) {
+    state.linkStartId = id;
+    setStatus("Link mode: select target node.", "info");
+    updateLinkModeHighlight();
+    return;
+  }
+  if (state.linkStartId === id) {
+    state.linkStartId = null;
+    setStatus("Link mode: select first node.", "info");
+    updateLinkModeHighlight();
+    return;
+  }
+  const startNode = getNodeById(state.linkStartId);
+  if (startNode && startNode.type === "network") {
+    state.linkStartId = null;
+    setStatus("Linking networks is disabled.", "warn");
+    updateLinkModeHighlight();
+    return;
+  }
+  const from = state.linkStartId;
+  const to = id;
+  const linkIndex = state.board.links.findIndex(
+    (link) =>
+      (link.from === from && link.to === to) || (link.from === to && link.to === from)
+  );
+  if (linkIndex >= 0) {
+    state.board.links.splice(linkIndex, 1);
+    setStatus("Link removed.", "info");
+    setDirty(true);
+    renderAll();
+  } else {
+    state.board.links.push({
+      id: crypto?.randomUUID ? crypto.randomUUID() : `link-${Date.now()}`,
+      from,
+      to,
+    });
+    setDirty(true);
+    renderAll();
+  }
+  state.linkStartId = null;
+  updateLinkModeHighlight();
+}
+
 canvas.addEventListener("mousedown", (event) => {
   if (event.button === 2) {
     event.preventDefault();
@@ -776,6 +988,12 @@ canvas.addEventListener("contextmenu", (event) => {
   event.preventDefault();
 });
 window.addEventListener("resize", updateViewport);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && state.linkMode) {
+    setLinkMode(false);
+    setStatus("Link mode disabled.", "info");
+  }
+});
 
 document.querySelectorAll("[data-add]").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -791,6 +1009,27 @@ lockBtn.addEventListener("click", () => {
   updateNodeElement(node);
   updatePropsForm();
   setDirty(true);
+});
+layerUpBtn.addEventListener("click", () => {
+  const node = getSelectedNode();
+  if (!node) return;
+  node.z = (typeof node.z === "number" ? node.z : 0) + 1;
+  updateNodeElement(node);
+  setDirty(true);
+});
+layerDownBtn.addEventListener("click", () => {
+  const node = getSelectedNode();
+  if (!node) return;
+  node.z = (typeof node.z === "number" ? node.z : 0) - 1;
+  updateNodeElement(node);
+  setDirty(true);
+});
+linkBtn.addEventListener("click", () => {
+  setLinkMode(!state.linkMode);
+  setStatus(
+    state.linkMode ? "Link mode: select first node." : "Link mode disabled.",
+    "info"
+  );
 });
 saveBtn.addEventListener("click", () => saveBoard());
 reloadBtn.addEventListener("click", () => loadBoard());

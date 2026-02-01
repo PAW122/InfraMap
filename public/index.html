@@ -23,6 +23,7 @@
           <button class="btn btn--ghost" data-add="switch">Add Switch</button>
           <button class="btn btn--ghost" data-add="cloud">Add Cloud</button>
           <button class="btn btn--ghost" data-add="network">Add Network</button>
+          <button id="link-btn" class="btn btn--ghost">Link Mode</button>
         </div>
         <div class="toolbar toolbar--actions">
           <div id="dirty-indicator" class="dirty-indicator is-hidden" aria-live="polite"></div>
@@ -117,6 +118,8 @@
               <textarea name="notes" rows="4" placeholder="Role, OS, services"></textarea>
             </label>
             <div class="props__actions">
+              <button id="layer-down" class="btn btn--ghost" type="button">Layer Down</button>
+              <button id="layer-up" class="btn btn--ghost" type="button">Layer Up</button>
               <button id="delete-btn" class="btn btn--danger" type="button">Delete Node</button>
             </div>
           </form>

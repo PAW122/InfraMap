@@ -212,6 +212,28 @@ code {
   cursor: grabbing;
 }
 
+.canvas.link-mode {
+  cursor: crosshair;
+}
+
+.canvas.link-mode .node {
+  cursor: pointer;
+}
+
+.links-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.link-line {
+  stroke: rgba(28, 29, 33, 0.45);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
 .world {
   position: absolute;
   inset: 0;
@@ -551,6 +573,11 @@ code {
 .node.selected {
   border-color: var(--accent);
   box-shadow: 0 18px 30px rgba(240, 90, 40, 0.3);
+}
+
+.node.link-start {
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 3px rgba(29, 111, 163, 0.25);
 }
 
 .node.locked {
