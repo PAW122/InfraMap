@@ -1,9 +1,17 @@
 const canvas = document.getElementById("canvas");
+const world = document.getElementById("world");
 const statusEl = document.getElementById("status");
 const propsForm = document.getElementById("props-form");
 const deleteBtn = document.getElementById("delete-btn");
 const saveBtn = document.getElementById("save-btn");
 const reloadBtn = document.getElementById("reload-btn");
+const zoomOutBtn = document.getElementById("zoom-out");
+const zoomInBtn = document.getElementById("zoom-in");
+const zoomLevel = document.getElementById("zoom-level");
+const centerViewBtn = document.getElementById("center-view");
+
+const gridSize = 32;
+const zoomLimits = { min: 0.35, max: 2.5 };
 
 const typeLabels = {
   server: "SV",
@@ -34,10 +42,16 @@ function createEmptyBoard() {
 
 function normalizeBoard(data) {
   if (!data || typeof data !== "object") return createEmptyBoard();
+  const viewport = data.viewport || {};
+  const safeViewport = {
+    x: typeof viewport.x === "number" ? viewport.x : 0,
+    y: typeof viewport.y === "number" ? viewport.y : 0,
+    zoom: typeof viewport.zoom === "number" ? viewport.zoom : 1,
+  };
   return {
     version: data.version || 1,
     meta: data.meta || { name: "InfraMap", updatedAt: new Date().toISOString() },
-    viewport: data.viewport || { x: 0, y: 0, zoom: 1 },
+    viewport: safeViewport,
     nodes: Array.isArray(data.nodes) ? data.nodes : [],
     links: Array.isArray(data.links) ? data.links : [],
   };
@@ -48,14 +62,79 @@ function setStatus(message, tone = "neutral") {
   statusEl.dataset.tone = tone;
 }
 
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getViewport() {
+  if (!state.board.viewport) {
+    state.board.viewport = { x: 0, y: 0, zoom: 1 };
+  }
+  return state.board.viewport;
+}
+
+function updateViewport() {
+  const viewport = getViewport();
+  viewport.zoom = clamp(viewport.zoom || 1, zoomLimits.min, zoomLimits.max);
+  const rect = canvas.getBoundingClientRect();
+  const cx = rect.width / 2;
+  const cy = rect.height / 2;
+  const tx = cx - viewport.x * viewport.zoom;
+  const ty = cy - viewport.y * viewport.zoom;
+
+  world.style.transform = `translate(${tx}px, ${ty}px) scale(${viewport.zoom})`;
+  const scaledGrid = gridSize * viewport.zoom;
+  canvas.style.backgroundSize = `${scaledGrid}px ${scaledGrid}px`;
+  canvas.style.backgroundPosition = `${tx}px ${ty}px`;
+  updateZoomLabel();
+}
+
+function updateZoomLabel() {
+  const viewport = getViewport();
+  if (zoomLevel) {
+    zoomLevel.textContent = `${Math.round(viewport.zoom * 100)}%`;
+  }
+}
+
+function screenToWorld(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const viewport = getViewport();
+  const cx = rect.width / 2;
+  const cy = rect.height / 2;
+  const sx = clientX - rect.left;
+  const sy = clientY - rect.top;
+  return {
+    x: (sx - cx) / viewport.zoom + viewport.x,
+    y: (sy - cy) / viewport.zoom + viewport.y,
+  };
+}
+
+function setZoom(zoom, clientX, clientY) {
+  const viewport = getViewport();
+  const rect = canvas.getBoundingClientRect();
+  const cx = rect.width / 2;
+  const cy = rect.height / 2;
+  const sx = typeof clientX === "number" ? clientX - rect.left : cx;
+  const sy = typeof clientY === "number" ? clientY - rect.top : cy;
+  const before = {
+    x: (sx - cx) / viewport.zoom + viewport.x,
+    y: (sy - cy) / viewport.zoom + viewport.y,
+  };
+
+  viewport.zoom = clamp(zoom, zoomLimits.min, zoomLimits.max);
+  viewport.x = before.x - (sx - cx) / viewport.zoom;
+  viewport.y = before.y - (sy - cy) / viewport.zoom;
+  updateViewport();
+}
 function renderAll() {
-  canvas.innerHTML = "";
+  world.innerHTML = "";
   state.board.nodes.forEach((node) => {
     const el = buildNodeElement(node);
-    canvas.appendChild(el);
+    world.appendChild(el);
   });
   applySelection();
   updatePropsForm();
+  updateViewport();
 }
 
 function buildNodeElement(node) {
@@ -108,7 +187,7 @@ function buildIpLine(node) {
 }
 
 function applySelection() {
-  const nodes = canvas.querySelectorAll(".node");
+  const nodes = world.querySelectorAll(".node");
   nodes.forEach((nodeEl) => {
     if (nodeEl.dataset.id === state.selectedId) {
       nodeEl.classList.add("selected");
@@ -125,7 +204,7 @@ function selectNode(id) {
 }
 
 function focusNode(id) {
-  const nodeEl = canvas.querySelector(`[data-id="${id}"]`);
+  const nodeEl = world.querySelector(`[data-id="${id}"]`);
   if (!nodeEl) return;
   nodeEl.classList.add("pulse");
   setTimeout(() => nodeEl.classList.remove("pulse"), 600);
@@ -161,15 +240,13 @@ function getSelectedNode() {
 function startDrag(event, id) {
   const node = state.board.nodes.find((n) => n.id === id);
   if (!node) return;
-  const rect = canvas.getBoundingClientRect();
-  const nodeEl = canvas.querySelector(`[data-id="${id}"]`);
+  const nodeEl = world.querySelector(`[data-id="${id}"]`);
   if (!nodeEl) return;
-  const nodeRect = nodeEl.getBoundingClientRect();
+  const point = screenToWorld(event.clientX, event.clientY);
   state.dragging = {
     id,
-    offsetX: event.clientX - nodeRect.left,
-    offsetY: event.clientY - nodeRect.top,
-    rect,
+    offsetX: point.x - node.x,
+    offsetY: point.y - node.y,
   };
   window.addEventListener("mousemove", onDrag);
   window.addEventListener("mouseup", stopDrag);
@@ -177,14 +254,13 @@ function startDrag(event, id) {
 
 function onDrag(event) {
   if (!state.dragging) return;
-  const { id, offsetX, offsetY, rect } = state.dragging;
+  const { id, offsetX, offsetY } = state.dragging;
   const node = state.board.nodes.find((n) => n.id === id);
-  const nodeEl = canvas.querySelector(`[data-id="${id}"]`);
+  const nodeEl = world.querySelector(`[data-id="${id}"]`);
   if (!node || !nodeEl) return;
-  const x = event.clientX - rect.left - offsetX;
-  const y = event.clientY - rect.top - offsetY;
-  node.x = Math.max(0, x);
-  node.y = Math.max(0, y);
+  const point = screenToWorld(event.clientX, event.clientY);
+  node.x = point.x - offsetX;
+  node.y = point.y - offsetY;
   nodeEl.style.left = `${node.x}px`;
   nodeEl.style.top = `${node.y}px`;
 }
@@ -197,12 +273,14 @@ function stopDrag() {
 
 function addNode(type) {
   const id = crypto?.randomUUID ? crypto.randomUUID() : `node-${Date.now()}`;
+  const viewport = getViewport();
+  const offset = (state.board.nodes.length % 6) * 24;
   const node = {
     id,
     type,
     label: `${type.toUpperCase()}-${state.board.nodes.length + 1}`,
-    x: 120 + state.board.nodes.length * 24,
-    y: 120 + state.board.nodes.length * 24,
+    x: viewport.x + offset,
+    y: viewport.y + offset,
     network: "",
     ipPrivate: "",
     ipPublic: "",
@@ -253,6 +331,53 @@ async function saveBoard() {
   }
 }
 
+let panState = null;
+
+function startPan(event) {
+  if (event.button !== 0) return;
+  const viewport = getViewport();
+  panState = {
+    startX: event.clientX,
+    startY: event.clientY,
+    startViewportX: viewport.x,
+    startViewportY: viewport.y,
+    moved: false,
+  };
+  window.addEventListener("mousemove", onPanMove);
+  window.addEventListener("mouseup", stopPan);
+}
+
+function onPanMove(event) {
+  if (!panState) return;
+  const viewport = getViewport();
+  const dx = (event.clientX - panState.startX) / viewport.zoom;
+  const dy = (event.clientY - panState.startY) / viewport.zoom;
+  if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+    panState.moved = true;
+  }
+  viewport.x = panState.startViewportX - dx;
+  viewport.y = panState.startViewportY - dy;
+  updateViewport();
+}
+
+function stopPan() {
+  if (!panState) return;
+  const didMove = panState.moved;
+  panState = null;
+  window.removeEventListener("mousemove", onPanMove);
+  window.removeEventListener("mouseup", stopPan);
+  if (!didMove) {
+    selectNode(null);
+  }
+}
+
+function onWheel(event) {
+  event.preventDefault();
+  const viewport = getViewport();
+  const zoomFactor = Math.exp(-event.deltaY * 0.001);
+  setZoom(viewport.zoom * zoomFactor, event.clientX, event.clientY);
+}
+
 propsForm.addEventListener("input", (event) => {
   const node = getSelectedNode();
   if (!node) return;
@@ -267,7 +392,7 @@ propsForm.addEventListener("submit", (event) => {
 });
 
 function updateNodeElement(node) {
-  const nodeEl = canvas.querySelector(`[data-id="${node.id}"]`);
+  const nodeEl = world.querySelector(`[data-id="${node.id}"]`);
   if (!nodeEl) return;
   nodeEl.className = `node node--${node.type || "server"}`;
   if (node.id === state.selectedId) nodeEl.classList.add("selected");
@@ -280,10 +405,13 @@ function updateNodeElement(node) {
 }
 
 canvas.addEventListener("mousedown", (event) => {
-  if (event.target === canvas) {
-    selectNode(null);
+  if (event.target === canvas || event.target === world) {
+    startPan(event);
   }
 });
+
+canvas.addEventListener("wheel", onWheel, { passive: false });
+window.addEventListener("resize", updateViewport);
 
 document.querySelectorAll("[data-add]").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -294,5 +422,20 @@ document.querySelectorAll("[data-add]").forEach((btn) => {
 deleteBtn.addEventListener("click", () => deleteSelected());
 saveBtn.addEventListener("click", () => saveBoard());
 reloadBtn.addEventListener("click", () => loadBoard());
+zoomOutBtn.addEventListener("click", () => {
+  const viewport = getViewport();
+  setZoom(viewport.zoom * 0.9);
+});
+zoomInBtn.addEventListener("click", () => {
+  const viewport = getViewport();
+  setZoom(viewport.zoom * 1.1);
+});
+centerViewBtn.addEventListener("click", () => {
+  const viewport = getViewport();
+  viewport.x = 0;
+  viewport.y = 0;
+  viewport.zoom = 1;
+  updateViewport();
+});
 
 loadBoard();

@@ -33,9 +33,17 @@
         <section class="canvas-wrap">
           <div class="canvas-meta">
             <div class="chip">Drag nodes to position</div>
-            <div class="chip chip--quiet">Double-click node to focus</div>
+            <div class="chip chip--quiet">Drag background to pan</div>
+            <div class="zoom-controls">
+              <button id="zoom-out" class="btn btn--ghost btn--tiny" type="button">-</button>
+              <div id="zoom-level" class="zoom-level">100%</div>
+              <button id="zoom-in" class="btn btn--ghost btn--tiny" type="button">+</button>
+              <button id="center-view" class="btn btn--ghost btn--tiny" type="button">Center</button>
+            </div>
           </div>
-          <div id="canvas" class="canvas" tabindex="0" aria-label="Infrastructure canvas"></div>
+          <div id="canvas" class="canvas" tabindex="0" aria-label="Infrastructure canvas">
+            <div id="world" class="world"></div>
+          </div>
         </section>
         <aside class="panel">
           <div class="panel__header">
