@@ -46,6 +46,21 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleSSHStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	results := map[string]model.SSHStatus{}
+	if s.ssh != nil {
+		results = s.ssh.GetStatus()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"updatedAt": time.Now().UTC().Format(time.RFC3339),
+		"results":   results,
+	})
+}
+
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -115,6 +130,9 @@ func (s *Server) handleMonitoringNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.ping != nil {
 		s.ping.UpdateNodes(payload.Nodes)
+	}
+	if s.ssh != nil {
+		s.ssh.UpdateNodes(payload.Nodes)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status": "ok",

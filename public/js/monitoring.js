@@ -294,6 +294,7 @@ function startStatusPolling() {
   const interval = getStatusPollInterval();
   if (!interval) {
     state.statusById = {};
+    state.sshStatusById = {};
     updateStatusBadges();
     return;
   }
@@ -303,10 +304,13 @@ function startStatusPolling() {
 
 function getStatusPollInterval() {
   const intervals = state.board.nodes
-    .filter((node) => node.type !== "network" && node.pingEnabled === true)
+    .filter((node) => node.type !== "network" && (node.pingEnabled === true || node.connectEnabled === true))
     .map((node) => {
-      const value = typeof node.pingIntervalSec === "number" ? node.pingIntervalSec : 0;
-      return Math.max(5, Math.min(3600, value || monitoringDefaults.intervalSec));
+      if (node.pingEnabled === true) {
+        const value = typeof node.pingIntervalSec === "number" ? node.pingIntervalSec : 0;
+        return Math.max(5, Math.min(3600, value || monitoringDefaults.intervalSec));
+      }
+      return monitoringDefaults.intervalSec;
     });
   if (!intervals.length) return 0;
   return Math.min(...intervals);
@@ -314,10 +318,15 @@ function getStatusPollInterval() {
 
 async function fetchStatus() {
   try {
-    const res = await fetch("/api/status");
-    if (!res.ok) return;
-    const data = await res.json();
-    state.statusById = data.results || {};
+    const [pingRes, sshRes] = await Promise.all([fetch("/api/status"), fetch("/api/ssh-status")]);
+    if (pingRes.ok) {
+      const data = await pingRes.json();
+      state.statusById = data.results || {};
+    }
+    if (sshRes.ok) {
+      const data = await sshRes.json();
+      state.sshStatusById = data.results || {};
+    }
     updateStatusBadges();
   } catch (err) {
     setStatus("Failed to fetch status.", "warn");
@@ -350,9 +359,24 @@ function applyStatusToNode(node, nodeEl) {
     }
     return;
   }
+  const sshStatus = state.sshStatusById[node.id];
   if (node.connectEnabled === true) {
-    stateLabel = "ssh";
-    title = "SSH enabled";
+    if (sshStatus && sshStatus.online) {
+      stateLabel = "ssh";
+      title = "SSH connected";
+    } else if (node.pingEnabled === true) {
+      const ping = state.statusById[node.id];
+      if (ping && ping.online) {
+        stateLabel = "online";
+        title = "Online (ping)";
+      } else {
+        stateLabel = "unknown";
+        title = sshStatus ? "SSH offline" : "Checking SSH...";
+      }
+    } else {
+      stateLabel = "unknown";
+      title = sshStatus ? "SSH offline" : "Checking SSH...";
+    }
   } else if (node.pingEnabled === true) {
     const status = state.statusById[node.id];
     if (status && status.online) {

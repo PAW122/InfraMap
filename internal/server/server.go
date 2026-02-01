@@ -18,6 +18,7 @@ type Config struct {
 	BoardFile string
 	StaticDir string
 	Ping      *monitoring.PingManager
+	SSH       *monitoring.SSHStatusManager
 	Secrets   *storage.SecretStore
 	Logs      *storage.LogStore
 }
@@ -27,6 +28,7 @@ type Server struct {
 	boardFile string
 	staticDir string
 	ping      *monitoring.PingManager
+	ssh       *monitoring.SSHStatusManager
 	secrets   *storage.SecretStore
 	logs      *storage.LogStore
 }
@@ -37,6 +39,7 @@ func New(cfg Config) *Server {
 		boardFile: cfg.BoardFile,
 		staticDir: cfg.StaticDir,
 		ping:      cfg.Ping,
+		ssh:       cfg.SSH,
 		secrets:   cfg.Secrets,
 		logs:      cfg.Logs,
 	}
@@ -48,6 +51,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/board", s.handleBoard)
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/ssh-status", s.handleSSHStatus)
 	mux.HandleFunc("/api/logs", s.handleLogs)
 	mux.HandleFunc("/api/monitoring", s.handleMonitoring)
 	mux.HandleFunc("/api/monitoring/nodes", s.handleMonitoringNodes)
@@ -156,6 +160,9 @@ func (s *Server) updateManagerFromBytes(data []byte) {
 		return
 	}
 	s.ping.UpdateFromBoard(&board)
+	if s.ssh != nil {
+		s.ssh.UpdateNodes(board.Nodes)
+	}
 }
 
 func (s *Server) serveBoard(w http.ResponseWriter) {

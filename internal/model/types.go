@@ -35,6 +35,12 @@ type PingResult struct {
 	Error       string    `json:"error,omitempty"`
 }
 
+type SSHStatus struct {
+	Online      bool      `json:"online"`
+	LastChecked time.Time `json:"lastChecked"`
+	Error       string    `json:"error,omitempty"`
+}
+
 type DeviceSettings struct {
 	OS                   string `json:"os"`
 	Host                 string `json:"host"`

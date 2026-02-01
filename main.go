@@ -29,17 +29,19 @@ func main() {
 	}
 
 	logStore := storage.NewLogStore(500)
-	pingManager := monitoring.NewPingManager(logStore)
 	secretStore, err := storage.NewSecretStore(secretKeyFile, secretsFile)
 	if err != nil {
 		log.Fatalf("failed to init secrets store: %v", err)
 	}
+	pingManager := monitoring.NewPingManager(logStore)
+	sshManager := monitoring.NewSSHStatusManager(secretStore, logStore)
 
 	srv := server.New(server.Config{
 		DataDir:   dataDir,
 		BoardFile: boardFile,
 		StaticDir: staticDir,
 		Ping:      pingManager,
+		SSH:       sshManager,
 		Secrets:   secretStore,
 		Logs:      logStore,
 	})

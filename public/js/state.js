@@ -63,6 +63,7 @@ const state = {
     max: 80,
   },
   statusById: {},
+  sshStatusById: {},
   statusTimer: null,
 };
 
